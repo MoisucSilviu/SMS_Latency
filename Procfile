@@ -1,1 +1,1 @@
-web: gunicorn web_tester_secure:app
+web: gunicorn web_tester:app

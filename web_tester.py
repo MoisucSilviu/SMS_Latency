@@ -16,8 +16,6 @@ BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
 BANDWIDTH_APP_ID = os.getenv("BANDWIDTH_APP_ID")
 BANDWIDTH_NUMBER = os.getenv("BANDWIDTH_NUMBER")
-MEDIA_URL = os.getenv("MEDIA_URL", "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
-
 
 # BASIC AUTH CREDENTIALS
 APP_USERNAME = os.getenv("APP_USERNAME", "admin")
@@ -49,7 +47,7 @@ def requires_auth(f):
     return decorated
 
 # --- HTML TEMPLATES ---
-# ✨ MODIFIED to include message type selection and a text area
+# ✨ MODIFIED to add a Media URL field and JavaScript to show/hide it
 HTML_FORM = """
 <!DOCTYPE html>
 <html lang="en">
@@ -74,17 +72,33 @@ HTML_FORM = """
 
         <label>Message Type:</label>
         <div class="radio-group">
-            <input type="radio" id="sms" name="message_type" value="sms" checked>
+            <input type="radio" id="sms" name="message_type" value="sms" onchange="toggleMediaField()" checked>
             <label for="sms" style="display: inline-block; font-weight: normal;">SMS</label>
-            <input type="radio" id="mms" name="message_type" value="mms" style="margin-left: 20px;">
+            <input type="radio" id="mms" name="message_type" value="mms" onchange="toggleMediaField()" style="margin-left: 20px;">
             <label for="mms" style="display: inline-block; font-weight: normal;">MMS</label>
         </div>
 
+        <div id="media_url_field" style="display:none;">
+            <label for="media_url">Media URL (for MMS only):</label>
+            <input type="text" id="media_url" name="media_url" placeholder="https://.../image.png">
+        </div>
+
         <label for="message_text">Text Message:</label>
-        <textarea id="message_text" name="message_text" placeholder="Enter your message here..."></textarea>
+        <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
         
         <input type="submit" value="Run Test">
     </form>
+
+    <script>
+        function toggleMediaField() {
+            var mediaField = document.getElementById('media_url_field');
+            if (document.getElementById('mms').checked) {
+                mediaField.style.display = 'block';
+            } else {
+                mediaField.style.display = 'none';
+            }
+        }
+    </script>
 </body>
 </html>
 """
@@ -124,17 +138,17 @@ def index():
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_test():
-    # ✨ MODIFIED to get all form data
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
+    media_url = request.form.get("media_url") # Use .get() for optional fields
     
     test_id = str(time.time())
     delivery_event = threading.Event()
     results[test_id] = {"event": delivery_event}
     
-    # ✨ MODIFIED to pass all data to the sending function
-    args = (destination_number, message_type, text_content, test_id)
+    # Pass all data to the sending function
+    args = (destination_number, message_type, text_content, media_url, test_id)
     threading.Thread(target=send_message, args=args).start()
     
     delivered_in_time = delivery_event.wait(timeout=120)
@@ -161,8 +175,8 @@ def handle_webhook():
     return "OK", 200
 
 # --- CORE LOGIC ---
-# ✨ RENAMED and MODIFIED to handle both SMS and MMS
-def send_message(destination_number, message_type, text_content, test_id):
+# ✨ MODIFIED to accept and use the media_url from the form
+def send_message(destination_number, message_type, text_content, media_url, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     headers = {"Content-Type": "application/json"}
@@ -175,9 +189,9 @@ def send_message(destination_number, message_type, text_content, test_id):
         "tag": test_id
     }
     
-    # Add media URL only if the type is MMS
-    if message_type == "mms":
-        payload["media"] = [MEDIA_URL]
+    # Add media URL to the payload only if type is MMS and a URL was provided
+    if message_type == "mms" and media_url:
+        payload["media"] = [media_url]
 
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
@@ -192,6 +206,6 @@ def send_message(destination_number, message_type, text_content, test_id):
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
-# This block is only for local development and will not be used by Gunicorn on Render
+# This block is only for local development
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

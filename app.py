@@ -59,9 +59,14 @@ HTML_FORM = """
 
             <fieldset>
                 <legend>Message Type</legend>
-                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
-                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" onchange="toggleMediaField()" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms" onchange="toggleMediaField()"> MMS</label>
             </fieldset>
+
+            <div id="media_url_field" style="display:none;">
+                <label for="media_url">Media URL (for MMS only)</label>
+                <input type="text" id="media_url" name="media_url" placeholder="https://.../image.png">
+            </div>
 
             <label for="message_text">Text Message</label>
             <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
@@ -69,6 +74,17 @@ HTML_FORM = """
             <button type="submit">Run Latency Test</button>
         </form>
     </article>
+    <script>
+        function toggleMediaField() {
+            var mediaField = document.getElementById('media_url_field');
+            if (document.getElementById('mms').checked) {
+                mediaField.style.display = 'block';
+            } else {
+                mediaField.style.display = 'none';
+            }
+        }
+        toggleMediaField(); // Run on page load
+    </script>
 </main>
 </body>
 </html>
@@ -118,14 +134,20 @@ def index():
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
+    # ✨ GET THE MEDIA URL FROM THE FORM
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
+    media_url = request.form.get("media_url") # Use .get() for the optional field
+
     test_id = str(time.time())
     delivery_event = threading.Event()
     results[test_id] = {"event": delivery_event, "status": "pending"}
-    args = (destination_number, message_type, text_content, test_id)
+    
+    # ✨ PASS THE MEDIA URL TO THE SENDING FUNCTION
+    args = (destination_number, message_type, text_content, media_url, test_id)
     threading.Thread(target=send_message, args=args).start()
+    
     timeout = 60 if message_type == "mms" else 120
     delivered_in_time = delivery_event.wait(timeout=timeout)
     result_data = results.pop(test_id, {})
@@ -153,12 +175,16 @@ def handle_webhook():
     return "OK", 200
 
 # --- CORE LOGIC ---
-def send_message(destination_number, message_type, text_content, test_id):
+# ✨ UPDATE THE FUNCTION TO USE THE PROVIDED MEDIA URL
+def send_message(destination_number, message_type, text_content, media_url, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     payload = {"to": [destination_number], "from": BANDWIDTH_NUMBER, "text": text_content, "applicationId": BANDWIDTH_APP_ID, "tag": test_id}
-    if message_type == "mms":
-        payload["media"] = ["https://i.imgur.com/e3j2F0u.png"]
+    
+    # Use the media_url from the form if provided for MMS
+    if message_type == "mms" and media_url:
+        payload["media"] = [media_url]
+        
     try:
         response = requests.post(api_url, auth=auth, json=payload, timeout=15)
         if response.status_code == 202:
@@ -172,6 +198,6 @@ def send_message(destination_number, message_type, text_content, test_id):
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
-# This block is for local development and will not be used by Gunicorn
+# This block is only for local development and will not be used by Gunicorn
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

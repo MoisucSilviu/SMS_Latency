@@ -16,6 +16,8 @@ BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
 BANDWIDTH_APP_ID = os.getenv("BANDWIDTH_APP_ID")
 BANDWIDTH_NUMBER = os.getenv("BANDWIDTH_NUMBER")
+MEDIA_URL = os.getenv("MEDIA_URL", "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+
 
 # BASIC AUTH CREDENTIALS
 APP_USERNAME = os.getenv("APP_USERNAME", "admin")
@@ -47,7 +49,6 @@ def requires_auth(f):
     return decorated
 
 # --- HTML TEMPLATES ---
-# ✨ MODIFIED to add a Media URL field and JavaScript to show/hide it
 HTML_FORM = """
 <!DOCTYPE html>
 <html lang="en">
@@ -141,13 +142,12 @@ def run_test():
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
-    media_url = request.form.get("media_url") # Use .get() for optional fields
+    media_url = request.form.get("media_url")
     
     test_id = str(time.time())
     delivery_event = threading.Event()
     results[test_id] = {"event": delivery_event}
     
-    # Pass all data to the sending function
     args = (destination_number, message_type, text_content, media_url, test_id)
     threading.Thread(target=send_message, args=args).start()
     
@@ -162,20 +162,36 @@ def run_test():
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
+    """Handles incoming webhooks from Bandwidth with added debugging."""
+    print("\n--- WEBHOOK RECEIVED ---")
     data = request.get_json()
+    print(f"Webhook Data: {data}")
+
+    print(f"Current tests in memory: {list(results.keys())}")
+
     for event in data:
         if event.get("type") == "message-delivered":
+            print("Found 'message-delivered' event.")
             test_id_from_tag = event.get("message", {}).get("tag")
+            print(f"Tag from webhook is: {test_id_from_tag}")
+
             if test_id_from_tag in results:
+                print(f"Tag MATCHES an active test. Processing result...")
                 start_time = results[test_id_from_tag].get("start_time")
                 if start_time:
                     results[test_id_from_tag]["latency"] = time.time() - start_time
                     results[test_id_from_tag]["message_id"] = event.get("message", {}).get("id")
                     results[test_id_from_tag]["event"].set()
+                    print("SUCCESS: Result processed and event set.")
+            else:
+                print("ERROR: Tag from webhook does not match any active test.")
+        else:
+            print(f"Received event of type: {event.get('type')}")
+
+    print("--- END WEBHOOK ---")
     return "OK", 200
 
 # --- CORE LOGIC ---
-# ✨ MODIFIED to accept and use the media_url from the form
 def send_message(destination_number, message_type, text_content, media_url, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
@@ -189,7 +205,6 @@ def send_message(destination_number, message_type, text_content, media_url, test
         "tag": test_id
     }
     
-    # Add media URL to the payload only if type is MMS and a URL was provided
     if message_type == "mms" and media_url:
         payload["media"] = [media_url]
 

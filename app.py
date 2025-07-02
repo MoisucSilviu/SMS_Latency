@@ -26,11 +26,12 @@ results = {}
 app = Flask(__name__)
 
 # --- BASIC AUTHENTICATION ---
-# ... (Authentication code remains the same) ...
 def check_auth(username, password):
     return username == APP_USERNAME and password == APP_PASSWORD
+
 def authenticate():
     return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -39,7 +40,6 @@ def requires_auth(f):
             return authenticate()
         return f(*args, **kwargs)
     return decorated
-
 
 # --- NAVIGATION & SHARED STYLES ---
 NAV_BAR = """
@@ -56,6 +56,7 @@ STYLES = """
     input[type=submit] { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 20px; }
     .nav { margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #ccc; }
     .result { font-size: 1.2em; }
+    .sent { color: #17a2b8; }
     .error { color: red; background-color: #ffebeb; padding: 10px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
@@ -103,6 +104,7 @@ HTML_STATUS_FORM = f"""
 </html>
 """
 
+# ✨ FIX: Escaped the Jinja2 curly braces to prevent the SyntaxError
 HTML_RESULT = f"""
 <!DOCTYPE html>
 <html lang="en">
@@ -110,32 +112,32 @@ HTML_RESULT = f"""
 <body>
     {NAV_BAR}
     <h2>Test Result</h2>
-    {% if error %}
-        <p class="error"><strong>Error:</strong><br>{{ error }}</p>
-    {% elif status == 'sent' %}
+    {{% if error %}}
+        <p class="error"><strong>Error:</strong><br>{{{ error }}}</p>
+    {{% elif status == 'sent' %}}
         <p class="result sent">✅ Message Sent Successfully!</p>
-        <p><strong>Message ID:</strong> {{ message_id }}</p>
+        <p><strong>Message ID:</strong> {{{ message_id }}}</p>
         <p>A 'message-delivered' report was not received within the timeout period.</p>
-    {% elif message and events %}
+    {{% elif message and events %}}
         <h3>Message Details</h3>
         <p>
-            <strong>From:</strong> {{ message.owner }}<br>
-            <strong>To:</strong> {{ message.to[0] }}<br>
-            <strong>Direction:</strong> {{ message.direction }}<br>
-            <strong>Status:</strong> {{ message.messageStatus }}<br>
+            <strong>From:</strong> {{{ message.owner }}}<br>
+            <strong>To:</strong> {{{ message.to[0] }}}<br>
+            <strong>Direction:</strong> {{{ message.direction }}}<br>
+            <strong>Status:</strong> {{{ message.messageStatus }}}<br>
         </p>
         <h3>Event History</h3>
         <table>
             <tr><th>Time</th><th>Type</th><th>Description</th></tr>
-            {% for event in events %}
-            <tr><td>{{ event.time }}</td><td>{{ event.type }}</td><td>{{ event.description }}</td></tr>
-            {% endfor %}
+            {{% for event in events %}}
+            <tr><td>{{{ event.time }}}</td><td>{{{ event.type }}}</td><td>{{{ event.description }}}</td></tr>
+            {{% endfor %}}
         </table>
-    {% else %}
+    {{% else %}}
         <p class="result">✅ Message Delivered!</p>
-        <p><strong>Message ID:</strong> {{ message_id }}</p>
-        <p><strong>Total End-to-End Latency:</strong> {{ latency }} seconds</p>
-    {% endif %}
+        <p><strong>Message ID:</strong> {{{ message_id }}}</p>
+        <p><strong>Total End-to-End Latency:</strong> {{{ latency }}} seconds</p>
+    {{% endif %}}
     <br>
     <a href="/">Run another test</a> or <a href="/status">Check a message status</a>
 </body>
@@ -156,7 +158,6 @@ def status_viewer_page():
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
-    # ... (this function remains the same as your advanced tester)
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
@@ -181,7 +182,6 @@ def run_latency_test():
 @app.route("/get_status", methods=["POST"])
 @requires_auth
 def get_message_status():
-    # ... (this function is from the status viewer)
     message_id = request.form["message_id"]
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages/{message_id}"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
@@ -201,7 +201,6 @@ def get_message_status():
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
-    # ... (this function remains the same)
     data = request.get_json()
     for event in data:
         if event.get("type") == "message-delivered":
@@ -215,12 +214,12 @@ def handle_webhook():
 
 # --- CORE LOGIC ---
 def send_message(destination_number, message_type, text_content, test_id):
-    # ... (this function remains the same)
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     payload = {"to": [destination_number], "from": BANDWIDTH_NUMBER, "text": text_content, "applicationId": BANDWIDTH_APP_ID, "tag": test_id}
     if message_type == "mms":
-        payload["media"] = ["https://i.imgur.com/example.png"]
+        # Using a generic, reliable image host for the MMS example
+        payload["media"] = ["https://i.imgur.com/e3j2F0u.png"]
     try:
         response = requests.post(api_url, auth=auth, json=payload, timeout=15)
         if response.status_code == 202:
@@ -234,7 +233,6 @@ def send_message(destination_number, message_type, text_content, test_id):
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
-
-# This block is only for local development
+# This block is only for local development and will not be used by Gunicorn on Render
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

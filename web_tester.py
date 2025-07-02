@@ -16,6 +16,8 @@ BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
 BANDWIDTH_APP_ID = os.getenv("BANDWIDTH_APP_ID")
 BANDWIDTH_NUMBER = os.getenv("BANDWIDTH_NUMBER")
+MEDIA_URL = os.getenv("MEDIA_URL", "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+
 
 # BASIC AUTH CREDENTIALS
 APP_USERNAME = os.getenv("APP_USERNAME", "admin")
@@ -47,29 +49,46 @@ def requires_auth(f):
     return decorated
 
 # --- HTML TEMPLATES ---
+# ✨ MODIFIED to include message type selection and a text area
 HTML_FORM = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>SMS Latency Tester</title>
+    <title>Advanced Messaging Tester</title>
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; }
-        input[type=text] { width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box; }
-        input[type=submit] { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+        label { display: block; margin-top: 15px; font-weight: bold; }
+        input[type=text], textarea { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; }
+        textarea { resize: vertical; min-height: 80px; }
+        .radio-group { margin-top: 5px; }
+        input[type=submit] { background-color: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin-top: 20px; }
     </style>
 </head>
 <body>
-    <h2>SMS End-to-End Latency Tester</h2>
+    <h2>Advanced Messaging Latency Tester</h2>
     <form action="/run_test" method="post">
-        <label for="destination_number">Enter destination phone number (e.g., +15551234567):</label>
-        <input type="text" id="destination_number" name="destination_number" required>
+        
+        <label for="destination_number">Destination Phone Number:</label>
+        <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
+
+        <label>Message Type:</label>
+        <div class="radio-group">
+            <input type="radio" id="sms" name="message_type" value="sms" checked>
+            <label for="sms" style="display: inline-block; font-weight: normal;">SMS</label>
+            <input type="radio" id="mms" name="message_type" value="mms" style="margin-left: 20px;">
+            <label for="mms" style="display: inline-block; font-weight: normal;">MMS</label>
+        </div>
+
+        <label for="message_text">Text Message:</label>
+        <textarea id="message_text" name="message_text" placeholder="Enter your message here..."></textarea>
+        
         <input type="submit" value="Run Test">
     </form>
 </body>
 </html>
 """
-# ✨ MODIFIED to better display error details
+
 HTML_RESULT = """
 <!DOCTYPE html>
 <html lang="en">
@@ -105,11 +124,19 @@ def index():
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_test():
+    # ✨ MODIFIED to get all form data
     destination_number = request.form["destination_number"]
+    message_type = request.form["message_type"]
+    text_content = request.form["message_text"]
+    
     test_id = str(time.time())
     delivery_event = threading.Event()
     results[test_id] = {"event": delivery_event}
-    threading.Thread(target=send_sms, args=(destination_number, test_id)).start()
+    
+    # ✨ MODIFIED to pass all data to the sending function
+    args = (destination_number, message_type, text_content, test_id)
+    threading.Thread(target=send_message, args=args).start()
+    
     delivered_in_time = delivery_event.wait(timeout=120)
     result_data = results.pop(test_id, {})
     if not delivered_in_time and 'error' not in result_data:
@@ -134,23 +161,29 @@ def handle_webhook():
     return "OK", 200
 
 # --- CORE LOGIC ---
-def send_sms(destination_number, test_id):
+# ✨ RENAMED and MODIFIED to handle both SMS and MMS
+def send_message(destination_number, message_type, text_content, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     headers = {"Content-Type": "application/json"}
+    
     payload = {
         "to": [destination_number],
         "from": BANDWIDTH_NUMBER,
-        "text": "Latency test initiated from web.",
+        "text": text_content,
         "applicationId": BANDWIDTH_APP_ID,
         "tag": test_id
     }
+    
+    # Add media URL only if the type is MMS
+    if message_type == "mms":
+        payload["media"] = [MEDIA_URL]
+
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
         if response.status_code == 202:
             results[test_id]["start_time"] = time.time()
         else:
-            # ✨ FIX: Capture the detailed error from Bandwidth's response
             error_details = response.json()
             error_description = error_details.get('description', 'No description provided.')
             results[test_id]["error"] = f"API Error (Status {response.status_code}):\n{error_description}"

@@ -27,9 +27,16 @@ app = Flask(__name__)
 
 # --- BASIC AUTHENTICATION ---
 def check_auth(username, password):
+    """Checks if the provided username and password are correct."""
     return username == APP_USERNAME and password == APP_PASSWORD
+
 def authenticate():
-    return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+    """Sends a 401 Unauthorized response that prompts for login."""
+    return Response(
+        'Could not verify your access level for that URL.\n'
+        'You have to login with proper credentials', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -39,91 +46,96 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- HTML TEMPLATES ---
-HTML_FORM = """
+# --- HTML TEMPLATES & STYLES ---
+HTML_HEADER = """
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
-    <title>Advanced Messaging Tester</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bandwidth Messaging Tools</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
-    <style> body > main { padding: 2rem; } </style>
+    <style>
+        body > main { padding: 2rem; }
+        .error { background-color: var(--pico-form-element-invalid-background-color); color: var(--pico-form-element-invalid-color); padding: 1rem; border-radius: var(--pico-border-radius); white-space: pre-wrap; word-wrap: break-word; }
+        .timeline { list-style-type: none; padding-left: 0; }
+        .timeline li { padding-left: 2rem; border-left: 3px solid var(--pico-primary); position: relative; padding-bottom: 1.5rem; margin-left: 1rem; }
+        .timeline li::before { content: '✓'; position: absolute; left: -12px; top: 0; background: var(--pico-primary); color: white; width: 24px; height: 24px; border-radius: 50%; text-align: center; line-height: 24px; }
+        .nav { margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #ccc; }
+    </style>
 </head>
 <body>
 <main class="container">
+    <nav class="nav">
+        <ul>
+            <li><strong>Bandwidth Tools</strong></li>
+        </ul>
+        <ul>
+            <li><a href="/">Latency Tester</a></li>
+        </ul>
+    </nav>
+"""
+
+HTML_FOOTER = """
+</main>
+</body>
+</html>
+"""
+
+HTML_FORM = HTML_HEADER + """
     <article>
-        <h2>Advanced Messaging Latency Tester</h2>
+        <h2 id="latency">Advanced Messaging DLR Tester</h2>
         <form action="/run_test" method="post">
             <label for="destination_number">Destination Phone Number</label>
             <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
 
             <fieldset>
                 <legend>Message Type</legend>
-                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" onchange="toggleMediaField()" checked> SMS</label>
-                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms" onchange="toggleMediaField()"> MMS</label>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
             </fieldset>
-
-            <div id="media_url_field" style="display:none;">
-                <label for="media_url">Media URL (for MMS only)</label>
-                <input type="text" id="media_url" name="media_url" placeholder="https://.../image.png">
-            </div>
 
             <label for="message_text">Text Message</label>
             <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
             
-            <button type="submit">Run Latency Test</button>
+            <button type="submit">Run DLR Test</button>
         </form>
     </article>
-    <script>
-        function toggleMediaField() {
-            var mediaField = document.getElementById('media_url_field');
-            if (document.getElementById('mms').checked) {
-                mediaField.style.display = 'block';
-            } else {
-                mediaField.style.display = 'none';
-            }
-        }
-        toggleMediaField(); // Run on page load
-    </script>
-</main>
-</body>
-</html>
-"""
+""" + HTML_FOOTER
 
-HTML_RESULT = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Test Result</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
-    <style>
-        body > main { padding: 2rem; }
-        .error { background-color: var(--pico-form-element-invalid-background-color); color: var(--pico-form-element-invalid-color); padding: 1rem; border-radius: var(--pico-border-radius); }
-        .sent { color: var(--pico-color-azure-600); }
-    </style>
-</head>
-<body>
-<main class="container">
+HTML_RESULT = HTML_HEADER + """
     <article>
         <h2>Test Result</h2>
         {% if error %}
             <p class="error"><strong>Error:</strong><br>{{ error }}</p>
-        {% elif status == 'sent' %}
-            <h3 class="sent">✅ Message Sent Successfully!</h3>
-            <p><strong>Message ID:</strong> {{ message_id }}</p>
-            <p>A 'message-delivered' report was not received within the timeout period.</p>
         {% else %}
-            <h3>✅ Message Delivered!</h3>
+            <h3>DLR Timeline</h3>
+            <ul class="timeline">
+                <li>
+                    <strong>Message Sent to API</strong><br>
+                    Timestamp: {{ events.get('sent_str', 'N/A') }}
+                </li>
+                {% if events.sending %}
+                <li>
+                    <strong>Sent to Carrier</strong> (Leg 1 Latency: {{ "%.2f"|format(events.sending_latency) }}s)<br>
+                    Timestamp: {{ events.get('sending_str', 'N/A') }}
+                </li>
+                {% endif %}
+                {% if events.delivered %}
+                <li>
+                    <strong>Delivered to Handset</strong> (Leg 2 Latency: {{ "%.2f"|format(events.delivered_latency) }}s)<br>
+                    Timestamp: {{ events.get('delivered_str', 'N/A') }}
+                </li>
+                {% endif %}
+            </ul>
+            <hr>
+            <h4>Total End-to-End Latency: {{ "%.2f"|format(events.total_latency) }} seconds</h4>
             <p><strong>Message ID:</strong> {{ message_id }}</p>
-            <p><strong>Total End-to-End Latency:</strong> {{ latency }} seconds</p>
         {% endif %}
+        <br>
         <a href="/" role="button" class="secondary">Run another test</a>
     </article>
-</main>
-</body>
-</html>
-"""
+""" + HTML_FOOTER
 
 # --- FLASK ROUTES ---
 @app.route("/")
@@ -134,62 +146,83 @@ def index():
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
-    # ✨ GET THE MEDIA URL FROM THE FORM
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
-    media_url = request.form.get("media_url") # Use .get() for the optional field
-
     test_id = str(time.time())
-    delivery_event = threading.Event()
-    results[test_id] = {"event": delivery_event, "status": "pending"}
     
-    # ✨ PASS THE MEDIA URL TO THE SENDING FUNCTION
-    args = (destination_number, message_type, text_content, media_url, test_id)
+    delivery_event = threading.Event()
+    results[test_id] = {"event": delivery_event, "events": {}}
+    
+    args = (destination_number, message_type, text_content, test_id)
     threading.Thread(target=send_message, args=args).start()
     
-    timeout = 60 if message_type == "mms" else 120
-    delivered_in_time = delivery_event.wait(timeout=timeout)
+    # Wait for the final event (delivered or failed)
+    is_complete = delivery_event.wait(timeout=120)
+    
     result_data = results.pop(test_id, {})
+    events = result_data.get("events", {})
+
     if result_data.get("error"):
         return render_template_string(HTML_RESULT, error=result_data["error"])
-    elif not delivered_in_time:
-        if result_data.get("status") == "sent":
-             return render_template_string(HTML_RESULT, status="sent", message_id=result_data.get("message_id"))
-        else:
-             return render_template_string(HTML_RESULT, error=f"TIMEOUT: Did not receive a 'message-delivered' webhook after {timeout} seconds.")
-    else:
-        return render_template_string(HTML_RESULT, status="delivered", message_id=result_data.get("message_id"), latency=f"{result_data.get('latency', 0):.2f}")
+    
+    if not is_complete and not events:
+         return render_template_string(HTML_RESULT, error="TIMEOUT: No webhooks were received within 120 seconds.")
+
+    # Calculate latencies and format timestamps before rendering
+    if events.get("sent"):
+        events["sent_str"] = datetime.fromtimestamp(events["sent"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    if events.get("sending"):
+        events["sending_str"] = datetime.fromtimestamp(events["sending"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        events["sending_latency"] = events["sending"] - events.get("sent", events["sending"])
+    if events.get("delivered"):
+        events["delivered_str"] = datetime.fromtimestamp(events["delivered"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        events["delivered_latency"] = events["delivered"] - events.get("sending", events.get("sent", events["delivered"]))
+        events["total_latency"] = events["delivered"] - events.get("sent", events["delivered"])
+    
+    return render_template_string(HTML_RESULT, message_id=result_data.get("message_id"), events=events)
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     data = request.get_json()
     for event in data:
-        if event.get("type") == "message-delivered":
-            test_id_from_tag = event.get("message", {}).get("tag")
-            if test_id_from_tag in results:
-                if results[test_id_from_tag].get("status") == "sent":
-                    results[test_id_from_tag]["latency"] = time.time() - results[test_id_from_tag]["start_time"]
-                    results[test_id_from_tag]["status"] = "delivered"
-                    results[test_id_from_tag]["event"].set()
+        event_type = event.get("type")
+        message_info = event.get("message", {})
+        test_id_from_tag = message_info.get("tag")
+
+        if test_id_from_tag in results:
+            current_time = time.time()
+            if event_type == "message-sending":
+                results[test_id_from_tag]["events"]["sending"] = current_time
+            elif event_type == "message-delivered":
+                results[test_id_from_tag]["events"]["delivered"] = current_time
+                results[test_id_from_tag]["event"].set()
+            elif event_type == "message-failed":
+                results[test_id_from_tag]["error"] = f"Message Failed: {event.get('description')}"
+                results[test_id_from_tag]["event"].set()
     return "OK", 200
 
 # --- CORE LOGIC ---
-# ✨ UPDATE THE FUNCTION TO USE THE PROVIDED MEDIA URL
-def send_message(destination_number, message_type, text_content, media_url, test_id):
+def send_message(destination_number, message_type, text_content, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
-    payload = {"to": [destination_number], "from": BANDWIDTH_NUMBER, "text": text_content, "applicationId": BANDWIDTH_APP_ID, "tag": test_id}
+    headers = {"Content-Type": "application/json"}
     
-    # Use the media_url from the form if provided for MMS
-    if message_type == "mms" and media_url:
-        payload["media"] = [media_url]
-        
+    payload = {
+        "to": [destination_number],
+        "from": BANDWIDTH_NUMBER,
+        "text": text_content,
+        "applicationId": BANDWIDTH_APP_ID,
+        "tag": test_id
+    }
+    
+    if message_type == "mms":
+        payload["media"] = ["https://i.imgur.com/e3j2F0u.png"]
+
     try:
-        response = requests.post(api_url, auth=auth, json=payload, timeout=15)
+        response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
         if response.status_code == 202:
-            results[test_id]["start_time"] = time.time()
-            results[test_id]["status"] = "sent"
+            results[test_id]["events"]["sent"] = time.time()
             results[test_id]["message_id"] = response.json().get("id")
         else:
             results[test_id]["error"] = f"API Error (Status {response.status_code}):\n{response.text}"
@@ -198,6 +231,6 @@ def send_message(destination_number, message_type, text_content, media_url, test
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
-# This block is only for local development and will not be used by Gunicorn
+# This block is for local development and will not be used by Gunicorn
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

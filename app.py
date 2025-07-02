@@ -39,47 +39,37 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- NAVIGATION & SHARED STYLES ---
-# ✨ FIX: These are now regular strings, not f-strings
-NAV_BAR = """
-<div class="nav">
-    <a href="/">Latency Tester</a> | <a href="/status">Message Status Viewer</a>
-</div>
-"""
-STYLES = """
-<style>
-    body { font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; }
-    /* ... other styles ... */
-</style>
-"""
-
 # --- HTML TEMPLATES ---
-# ✨ FIX: Removed the 'f' prefix from the string definitions
-HTML_LATENCY_FORM = """
+HTML_FORM = """
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Advanced Messaging Tester</title>""" + STYLES + """</head>
+<head>
+    <meta charset="UTF-8">
+    <title>Advanced Messaging Tester</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    <style> body > main { padding: 2rem; } </style>
+</head>
 <body>
-    """ + NAV_BAR + """
-    <h2>Advanced Messaging Latency Tester</h2>
-    <form action="/run_test" method="post">
-        </form>
-</body>
-</html>
-"""
+<main class="container">
+    <article>
+        <h2>Advanced Messaging Latency Tester</h2>
+        <form action="/run_test" method="post">
+            <label for="destination_number">Destination Phone Number</label>
+            <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
 
-HTML_STATUS_FORM = """
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><title>Message Status Viewer</title>""" + STYLES + """</head>
-<body>
-    """ + NAV_BAR + """
-    <h2>Message Status & Log Viewer</h2>
-    <form action="/get_status" method="post">
-        <label for="message_id">Enter Message ID:</label>
-        <input type="text" id="message_id" name="message_id" required>
-        <input type="submit" value="Fetch Status">
-    </form>
+            <fieldset>
+                <legend>Message Type</legend>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
+            </fieldset>
+
+            <label for="message_text">Text Message</label>
+            <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
+            
+            <button type="submit">Run Latency Test</button>
+        </form>
+    </article>
+</main>
 </body>
 </html>
 """
@@ -87,91 +77,43 @@ HTML_STATUS_FORM = """
 HTML_RESULT = """
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><title>Test Result</title>""" + STYLES + """</head>
+<head>
+    <meta charset="UTF-8">
+    <title>Test Result</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    <style>
+        body > main { padding: 2rem; }
+        .error { background-color: var(--pico-form-element-invalid-background-color); color: var(--pico-form-element-invalid-color); padding: 1rem; border-radius: var(--pico-border-radius); }
+        .sent { color: var(--pico-color-azure-600); }
+    </style>
+</head>
 <body>
-    """ + NAV_BAR + """
-    <h2>Test Result</h2>
-    {% if error %}
-        <p class="error"><strong>Error:</strong><br>{{ error }}</p>
-    {% elif status == 'sent' %}
-        <p class="result sent">✅ Message Sent Successfully!</p>
-        <p><strong>Message ID:</strong> {{ message_id }}</p>
-        <p>A 'message-delivered' report was not received within the timeout period.</p>
-    {% elif message and events %}
-        <h3>Message Details</h3>
-        <p>
-            <strong>From:</strong> {{ message.owner }}<br>
-            <strong>To:</strong> {{ message.to[0] }}<br>
-            <strong>Direction:</strong> {{ message.direction }}<br>
-            <strong>Status:</strong> {{ message.messageStatus }}<br>
-        </p>
-        <h3>Event History</h3>
-        <table>
-            <tr><th>Time</th><th>Type</th><th>Description</th></tr>
-            {% for event in events %}
-            <tr><td>{{ event.time }}</td><td>{{ event.type }}</td><td>{{ event.description }}</td></tr>
-            {% endfor %}
-        </table>
-    {% else %}
-        <p class="result">✅ Message Delivered!</p>
-        <p><strong>Message ID:</strong> {{ message_id }}</p>
-        <p><strong>Total End-to-End Latency:</strong> {{ latency }} seconds</p>
-    {% endif %}
-    <br>
-    <a href="/">Run another test</a> or <a href="/status">Check a message status</a>
+<main class="container">
+    <article>
+        <h2>Test Result</h2>
+        {% if error %}
+            <p class="error"><strong>Error:</strong><br>{{ error }}</p>
+        {% elif status == 'sent' %}
+            <h3 class="sent">✅ Message Sent Successfully!</h3>
+            <p><strong>Message ID:</strong> {{ message_id }}</p>
+            <p>A 'message-delivered' report was not received within the timeout period.</p>
+        {% else %}
+            <h3>✅ Message Delivered!</h3>
+            <p><strong>Message ID:</strong> {{ message_id }}</p>
+            <p><strong>Total End-to-End Latency:</strong> {{ latency }} seconds</p>
+        {% endif %}
+        <a href="/" role="button" class="secondary">Run another test</a>
+    </article>
+</main>
 </body>
 </html>
 """
 
-# --- FLASK ROUTES AND CORE LOGIC (remains the same) ---
+# --- FLASK ROUTES ---
 @app.route("/")
 @requires_auth
-def latency_tester_page():
-    # This form doesn't use Jinja variables, so it's safe
-    latency_form_html = f"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head><meta charset="UTF-8"><title>Advanced Messaging Tester</title>{STYLES}</head>
-        <body>
-            {NAV_BAR}
-            <h2>Advanced Messaging Latency Tester</h2>
-            <form action="/run_test" method="post">
-                <label for="destination_number">Destination Phone Number:</label>
-                <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
-                <label>Message Type:</label>
-                <div>
-                    <input type="radio" id="sms" name="message_type" value="sms" checked> SMS
-                    <input type="radio" id="mms" name="message_type" value="mms" style="margin-left: 20px;"> MMS
-                </div>
-                <label for="message_text">Text Message:</label>
-                <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
-                <input type="submit" value="Run Latency Test">
-            </form>
-        </body>
-        </html>
-    """
-    return render_template_string(latency_form_html)
-
-@app.route("/status")
-@requires_auth
-def status_viewer_page():
-    # This form doesn't use Jinja variables, so it's safe
-    status_form_html = f"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head><meta charset="UTF-8"><title>Message Status Viewer</title>{STYLES}</head>
-        <body>
-            {NAV_BAR}
-            <h2>Message Status & Log Viewer</h2>
-            <form action="/get_status" method="post">
-                <label for="message_id">Enter Message ID:</label>
-                <input type="text" id="message_id" name="message_id" required>
-                <input type="submit" value="Fetch Status">
-            </form>
-        </body>
-        </html>
-    """
-    return render_template_string(status_form_html)
+def index():
+    return render_template_string(HTML_FORM)
 
 @app.route("/run_test", methods=["POST"])
 @requires_auth
@@ -197,26 +139,6 @@ def run_latency_test():
     else:
         return render_template_string(HTML_RESULT, status="delivered", message_id=result_data.get("message_id"), latency=f"{result_data.get('latency', 0):.2f}")
 
-@app.route("/get_status", methods=["POST"])
-@requires_auth
-def get_message_status():
-    message_id = request.form["message_id"]
-    api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages/{message_id}"
-    auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
-    try:
-        response = requests.get(api_url, auth=auth, timeout=15)
-        if response.status_code == 200:
-            message_details = response.json()
-            events_url = f"{api_url}/events"
-            events_response = requests.get(events_url, auth=auth, timeout=15)
-            events = events_response.json() if events_response.status_code == 200 else []
-            return render_template_string(HTML_RESULT, message=message_details, events=events)
-        else:
-            error_message = f"API Error (Status {response.status_code}):\n{response.text}"
-            return render_template_string(HTML_RESULT, error=error_message)
-    except requests.exceptions.RequestException as e:
-        return render_template_string(HTML_RESULT, error=f"Request Error: {e}")
-
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     data = request.get_json()
@@ -230,6 +152,7 @@ def handle_webhook():
                     results[test_id_from_tag]["event"].set()
     return "OK", 200
 
+# --- CORE LOGIC ---
 def send_message(destination_number, message_type, text_content, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
@@ -249,5 +172,6 @@ def send_message(destination_number, message_type, text_content, test_id):
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
+# This block is for local development and will not be used by Gunicorn
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

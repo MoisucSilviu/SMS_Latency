@@ -16,28 +16,27 @@ BANDWIDTH_ACCOUNT_ID = os.getenv("BANDWIDTH_ACCOUNT_ID")
 BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
 BANDWIDTH_APP_ID = os.getenv("BANDWIDTH_APP_ID")
-BANDWIDTH_NUMBER = os.getenv("BANDWIDTH_NUMBER")
+
+# ✨ 1. CONFIGURED FOR TF AND 10DLC NUMBERS
+TF_NUMBER = os.getenv("TF_NUMBER")
+TEN_DLC_NUMBER = os.getenv("TEN_DLC_NUMBER")
+
+# ✨ 2. STATIC MEDIA URL FOR MMS
+MEDIA_URL = os.getenv("MEDIA_URL", "https://i.imgur.com/e3j2F0u.png")
 
 # BASIC AUTH CREDENTIALS
 APP_USERNAME = os.getenv("APP_USERNAME", "admin")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "password")
 
-# SUMO LOGIC CONFIGURATION
-SUMO_ACCESS_ID = os.getenv("SUMO_ACCESS_ID")
-SUMO_ACCESS_KEY = os.getenv("SUMO_ACCESS_KEY")
-SUMO_API_ENDPOINT = os.getenv("SUMO_API_ENDPOINT")
-
 # --- GLOBAL VARIABLES & APP SETUP ---
 results = {}
 app = Flask(__name__)
 
-# --- BASIC AUTHENTICATION ---
+# --- BASIC AUTHENTICATION (Unchanged) ---
 def check_auth(username, password):
     return username == APP_USERNAME and password == APP_PASSWORD
-
 def authenticate():
     return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -64,19 +63,13 @@ HTML_HEADER = """
         .timeline li::before { content: '✓'; position: absolute; left: -12px; top: 0; background: var(--pico-primary); color: white; width: 24px; height: 24px; border-radius: 50%; text-align: center; line-height: 24px; }
         .sent { color: var(--pico-color-azure-600); }
         .nav { margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #ccc; }
-        pre { background-color: #f5f5f5; padding: 1rem; border-radius: var(--pico-border-radius); white-space: pre-wrap; word-wrap: break-word; }
     </style>
 </head>
 <body>
 <main class="container">
     <nav class="nav">
-        <ul>
-            <li><strong>Bandwidth Tools</strong></li>
-        </ul>
-        <ul>
-            <li><a href="/">Latency Tester</a></li>
-            <li><a href="/status">Message Status</a></li>
-        </ul>
+        <ul><li><strong>Bandwidth Tools</strong></li></ul>
+        <ul><li><a href="/">DLR Tester</a></li></ul>
     </nav>
 """
 
@@ -86,23 +79,24 @@ HTML_FOOTER = """
 </html>
 """
 
-HTML_LATENCY_FORM = HTML_HEADER + """
+HTML_FORM = HTML_HEADER + """
     <article>
         <h2 id="latency">Advanced Messaging DLR Tester</h2>
         <form action="/run_test" method="post">
+            <fieldset>
+                <legend>From Number Type</legend>
+                <label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label>
+                <label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label>
+            </fieldset>
+
             <label for="destination_number">Destination Phone Number</label>
             <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
 
             <fieldset>
                 <legend>Message Type</legend>
-                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" onchange="toggleMediaField()" checked> SMS</label>
-                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms" onchange="toggleMediaField()"> MMS</label>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
             </fieldset>
-            
-            <div id="media_url_field" style="display:none;">
-                <label for="media_url">Media URL (for MMS only)</label>
-                <input type="text" id="media_url" name="media_url" placeholder="https://.../image.png">
-            </div>
 
             <label for="message_text">Text Message</label>
             <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
@@ -110,75 +104,27 @@ HTML_LATENCY_FORM = HTML_HEADER + """
             <button type="submit">Run DLR Test</button>
         </form>
     </article>
-    <script>
-        function toggleMediaField() {
-            var mediaField = document.getElementById('media_url_field');
-            if (document.getElementById('mms').checked) {
-                mediaField.style.display = 'block';
-            } else {
-                mediaField.style.display = 'none';
-            }
-        }
-        toggleMediaField();
-    </script>
-""" + HTML_FOOTER
-
-HTML_STATUS_FORM = HTML_HEADER + """
-    <article>
-        <h2 id="status">Message Status & Log Viewer</h2>
-        <form action="/get_status" method="post">
-            <label for="message_id">Message ID</label>
-            <input type="text" id="message_id" name="message_id" required>
-            <button type="submit">Fetch Status</button>
-        </form>
-    </article>
 """ + HTML_FOOTER
 
 HTML_RESULT = HTML_HEADER + """
     <article>
-        <h2>Result</h2>
+        <h2>Test Result</h2>
         {% if error %}
             <p class="error"><strong>Error:</strong><br>{{ error }}</p>
         {% elif status == 'sent' %}
             <h3 class="sent">✅ MMS Sent Successfully!</h3>
             <p><strong>Message ID:</strong> {{ message_id }}</p>
-            <p>A 'message-delivered' report was not received within the 60-second timeout.</p>
-            <a href="/search_sumo/{{ message_id }}" role="button">Search for this ID in Sumo Logic</a>
-        {% elif message and events %}
-            <h3>Message Details</h3>
-            <figure><table><tbody>
-                <tr><td><strong>From</strong></td><td>{{ message.owner }}</td></tr>
-                <tr><td><strong>To</strong></td><td>{{ message.to[0] }}</td></tr>
-                <tr><td><strong>Direction</strong></td><td>{{ message.direction }}</td></tr>
-                <tr><td><strong>Status</strong></td><td>{{ message.messageStatus }}</td></tr>
-            </tbody></table></figure>
-            <h3>Event History</h3>
-            <figure><table>
-                <thead><tr><th>Time</th><th>Type</th><th>Description</th></tr></thead>
-                <tbody>
-                {% for event in events %}
-                    <tr><td>{{ event.time }}</td><td>{{ event.type }}</td><td>{{ event.description }}</td></tr>
-                {% endfor %}
-                </tbody>
-            </table></figure>
+            <hr>
+            <p><strong>Note:</strong> MMS Delivery Receipts (DLRs) are often delayed. A 'message-delivered' report was not received within the 60-second timeout. Please use your internal tools like Sumo Logic or Insights to verify the final delivery status.</p>
         {% else %}
             <h3>DLR Timeline</h3>
             <ul class="timeline">
-                <li>
-                    <strong>Message Sent to API</strong><br>
-                    Timestamp: {{ events.get('sent_str', 'N/A') }}
-                </li>
+                <li><strong>Message Sent to API</strong><br>Timestamp: {{ events.get('sent_str', 'N/A') }}</li>
                 {% if events.sending %}
-                <li>
-                    <strong>Sent to Carrier</strong> (Leg 1 Latency: {{ "%.2f"|format(events.sending_latency) }}s)<br>
-                    Timestamp: {{ events.get('sending_str', 'N/A') }}
-                </li>
+                <li><strong>Sent to Carrier</strong> (Leg 1 Latency: {{ "%.2f"|format(events.sending_latency) }}s)<br>Timestamp: {{ events.get('sending_str', 'N/A') }}</li>
                 {% endif %}
                 {% if events.delivered %}
-                <li>
-                    <strong>Delivered to Handset</strong> (Leg 2 Latency: {{ "%.2f"|format(events.delivered_latency) }}s)<br>
-                    Timestamp: {{ events.get('delivered_str', 'N/A') }}
-                </li>
+                <li><strong>Delivered to Handset</strong> (Leg 2 Latency: {{ "%.2f"|format(events.delivered_latency) }}s)<br>Timestamp: {{ events.get('delivered_str', 'N/A') }}</li>
                 {% endif %}
             </ul>
             <hr>
@@ -186,51 +132,31 @@ HTML_RESULT = HTML_HEADER + """
             <p><strong>Message ID:</strong> {{ message_id }}</p>
         {% endif %}
         <br>
-        <a href="/" role="button" class="secondary">Run another Latency Test</a>
-        <a href="/status" role="button" class="secondary">Check a Message Status</a>
-    </article>
-""" + HTML_FOOTER
-
-HTML_SUMO_RESULT = HTML_HEADER + """
-    <article>
-        <h2>Sumo Logic Search Results</h2>
-        <p>Showing logs for Message ID: <strong>{{ message_id }}</strong></p>
-        {% if error %}
-            <p class="error"><strong>Error:</strong><br>{{ error }}</p>
-        {% elif logs %}
-            <h4>Found {{ logs|length }} log entries:</h4>
-            <pre><code>{% for log in logs %}{{ log }}{% endfor %}</code></pre>
-        {% else %}
-            <p>No logs found for this Message ID in the given time range.</p>
-        {% endif %}
-        <a href="/" role="button" class="secondary">Back to Tester</a>
+        <a href="/" role="button" class="secondary">Run another test</a>
     </article>
 """ + HTML_FOOTER
 
 # --- FLASK ROUTES ---
 @app.route("/")
 @requires_auth
-def latency_tester_page():
-    return render_template_string(HTML_LATENCY_FORM)
-
-@app.route("/status")
-@requires_auth
-def status_viewer_page():
-    return render_template_string(HTML_STATUS_FORM)
+def index():
+    return render_template_string(HTML_FORM)
 
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
+    from_number_type = request.form["from_number_type"]
+    from_number = TF_NUMBER if from_number_type == 'tf' else TEN_DLC_NUMBER
+    
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
-    media_url = request.form.get("media_url")
     test_id = str(time.time())
     
     delivery_event = threading.Event()
     results[test_id] = {"event": delivery_event, "events": {}}
     
-    args = (destination_number, message_type, text_content, media_url, test_id)
+    args = (from_number, destination_number, message_type, text_content, test_id)
     threading.Thread(target=send_message, args=args).start()
     
     timeout = 60 if message_type == "mms" else 120
@@ -248,7 +174,6 @@ def run_latency_test():
     if not is_complete:
         return render_template_string(HTML_RESULT, error=f"TIMEOUT: No final webhook was received after {timeout} seconds.")
 
-    # Calculate latencies and format timestamps for the full DLR timeline
     events["total_latency"] = 0
     if events.get("sent"):
         events["sent_str"] = datetime.fromtimestamp(events["sent"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -261,26 +186,6 @@ def run_latency_test():
         events["total_latency"] = events["delivered"] - events.get("sent", events["delivered"])
     
     return render_template_string(HTML_RESULT, message_id=result_data.get("message_id"), events=events)
-
-@app.route("/get_status", methods=["POST"])
-@requires_auth
-def get_message_status():
-    message_id = request.form["message_id"]
-    api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages/{message_id}"
-    auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
-    try:
-        response = requests.get(api_url, auth=auth, timeout=15)
-        if response.status_code == 200:
-            message_details = response.json()
-            events_url = f"{api_url}/events"
-            events_response = requests.get(events_url, auth=auth, timeout=15)
-            events = events_response.json() if events_response.status_code == 200 else []
-            return render_template_string(HTML_RESULT, message=message_details, events=events)
-        else:
-            error_message = f"API Error (Status {response.status_code}):\n{response.text}"
-            return render_template_string(HTML_RESULT, error=error_message)
-    except requests.exceptions.RequestException as e:
-        return render_template_string(HTML_RESULT, error=f"Request Error: {e}")
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
@@ -302,57 +207,22 @@ def handle_webhook():
                 results[test_id_from_tag]["event"].set()
     return "OK", 200
 
-@app.route("/search_sumo/<message_id>")
-@requires_auth
-def search_sumo(message_id):
-    if not all([SUMO_ACCESS_ID, SUMO_ACCESS_KEY, SUMO_API_ENDPOINT]):
-        return render_template_string(HTML_SUMO_RESULT, message_id=message_id, error="Sumo Logic API credentials are not configured.")
-
-    sumo_query = f'_index=msg_api "{message_id}"'
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    auth = (SUMO_ACCESS_ID, SUMO_ACCESS_KEY)
-    search_payload = {"query": sumo_query, "from": "now-15m", "to": "now", "timeZone": "UTC"}
-
-    try:
-        create_job_url = f"{SUMO_API_ENDPOINT}/api/v1/search/jobs"
-        create_response = requests.post(create_job_url, auth=auth, headers=headers, json=search_payload, timeout=15)
-        create_response.raise_for_status()
-        job_id = create_response.json()["id"]
-
-        for _ in range(15):
-            time.sleep(1)
-            status_url = f"{SUMO_API_ENDPOINT}/api/v1/search/jobs/{job_id}"
-            status_response = requests.get(status_url, auth=auth, timeout=5)
-            status_response.raise_for_status()
-            job_status = status_response.json()
-            if job_status["state"] == "DONE GATHERING RESULTS":
-                results_url = f"{SUMO_API_ENDPOINT}/api/v1/search/jobs/{job_id}/messages?offset=0&limit=100"
-                results_response = requests.get(results_url, auth=auth, timeout=15)
-                results_response.raise_for_status()
-                logs = [msg["map"]["_raw"] + "\n" for msg in results_response.json()["messages"]]
-                return render_template_string(HTML_SUMO_RESULT, message_id=message_id, logs=logs)
-        
-        return render_template_string(HTML_SUMO_RESULT, message_id=message_id, error="Sumo Logic search timed out.")
-    except requests.exceptions.RequestException as e:
-        error_text = e.response.text if e.response else str(e)
-        return render_template_string(HTML_SUMO_RESULT, message_id=message_id, error=f"Sumo Logic API Error: {error_text}")
-
 # --- CORE LOGIC ---
-def send_message(destination_number, message_type, text_content, media_url, test_id):
+def send_message(from_number, destination_number, message_type, text_content, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     headers = {"Content-Type": "application/json"}
     
     payload = {
         "to": [destination_number],
-        "from": BANDWIDTH_NUMBER,
+        "from": from_number,
         "text": text_content,
         "applicationId": BANDWIDTH_APP_ID,
         "tag": test_id
     }
     
-    if message_type == "mms" and media_url:
-        payload["media"] = [media_url]
+    if message_type == "mms":
+        payload["media"] = [MEDIA_URL]
 
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
@@ -366,6 +236,6 @@ def send_message(destination_number, message_type, text_content, media_url, test
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
-# This block is for local development and will not be used by Gunicorn
+# This block is for local development
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

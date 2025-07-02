@@ -16,7 +16,7 @@ BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
 BANDWIDTH_APP_ID = os.getenv("BANDWIDTH_APP_ID")
 BANDWIDTH_NUMBER = os.getenv("BANDWIDTH_NUMBER")
-MEDIA_URL = os.getenv("MEDIA_URL", "https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png")
+MEDIA_URL = os.getenv("MEDIA_URL", "https://i.imgur.com/example.png") # Changed to a neutral host
 
 
 # BASIC AUTH CREDENTIALS
@@ -99,11 +99,14 @@ HTML_FORM = """
                 mediaField.style.display = 'none';
             }
         }
+        // Run on page load in case MMS is selected by default
+        toggleMediaField();
     </script>
 </body>
 </html>
 """
 
+# ✨ MODIFIED to handle the new "sent" status
 HTML_RESULT = """
 <!DOCTYPE html>
 <html lang="en">
@@ -113,6 +116,7 @@ HTML_RESULT = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; }
         .result { font-size: 1.2em; }
+        .sent { color: #17a2b8; }
         .error { color: red; background-color: #ffebeb; padding: 10px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
     </style>
 </head>
@@ -120,6 +124,9 @@ HTML_RESULT = """
     <h2>Test Result</h2>
     {% if error %}
         <p class="error"><strong>Error:</strong><br>{{ error }}</p>
+    {% elif status == 'sent' %}
+        <p class="result sent">✅ Message Sent Successfully!</p>
+        <p>A 'message-delivered' report was not received within 60 seconds.</p>
     {% else %}
         <p class="result">✅ Message Delivered!</p>
         <p><strong>Message ID:</strong> {{ message_id }}</p>
@@ -146,49 +153,46 @@ def run_test():
     
     test_id = str(time.time())
     delivery_event = threading.Event()
-    results[test_id] = {"event": delivery_event}
+    results[test_id] = {"event": delivery_event, "status": "pending"}
     
     args = (destination_number, message_type, text_content, media_url, test_id)
     threading.Thread(target=send_message, args=args).start()
     
-    delivered_in_time = delivery_event.wait(timeout=120)
+    # ✨ MODIFIED: Set a different timeout based on message type
+    timeout = 60 if message_type == "mms" else 120
+    delivered_in_time = delivery_event.wait(timeout=timeout)
+    
     result_data = results.pop(test_id, {})
-    if not delivered_in_time and 'error' not in result_data:
-        result_data["error"] = "TIMEOUT: Did not receive a 'message-delivered' webhook after 120 seconds."
+
+    # Handle different outcomes
     if result_data.get("error"):
         return render_template_string(HTML_RESULT, error=result_data["error"])
+    elif not delivered_in_time:
+        # If it timed out but the API call was successful, show "Sent" status
+        if result_data.get("status") == "sent":
+             return render_template_string(HTML_RESULT, status="sent")
+        else:
+             return render_template_string(HTML_RESULT, error=f"TIMEOUT: Did not receive a 'message-delivered' webhook after {timeout} seconds.")
     else:
-        return render_template_string(HTML_RESULT, message_id=result_data.get("message_id"), latency=f"{result_data.get('latency', 0):.2f}")
+        # Success case
+        return render_template_string(HTML_RESULT, 
+                                      status="delivered",
+                                      message_id=result_data.get("message_id"), 
+                                      latency=f"{result_data.get('latency', 0):.2f}")
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
-    """Handles incoming webhooks from Bandwidth with added debugging."""
-    print("\n--- WEBHOOK RECEIVED ---")
     data = request.get_json()
-    print(f"Webhook Data: {data}")
-
-    print(f"Current tests in memory: {list(results.keys())}")
-
     for event in data:
         if event.get("type") == "message-delivered":
-            print("Found 'message-delivered' event.")
             test_id_from_tag = event.get("message", {}).get("tag")
-            print(f"Tag from webhook is: {test_id_from_tag}")
-
             if test_id_from_tag in results:
-                print(f"Tag MATCHES an active test. Processing result...")
                 start_time = results[test_id_from_tag].get("start_time")
                 if start_time:
                     results[test_id_from_tag]["latency"] = time.time() - start_time
                     results[test_id_from_tag]["message_id"] = event.get("message", {}).get("id")
+                    results[test_id_from_tag]["status"] = "delivered"
                     results[test_id_from_tag]["event"].set()
-                    print("SUCCESS: Result processed and event set.")
-            else:
-                print("ERROR: Tag from webhook does not match any active test.")
-        else:
-            print(f"Received event of type: {event.get('type')}")
-
-    print("--- END WEBHOOK ---")
     return "OK", 200
 
 # --- CORE LOGIC ---
@@ -211,7 +215,9 @@ def send_message(destination_number, message_type, text_content, media_url, test
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
         if response.status_code == 202:
+            # ✨ MODIFIED: Set start time and a "sent" status
             results[test_id]["start_time"] = time.time()
+            results[test_id]["status"] = "sent"
         else:
             error_details = response.json()
             error_description = error_details.get('description', 'No description provided.')

@@ -69,6 +69,7 @@ HTML_FORM = """
 </body>
 </html>
 """
+# ✨ MODIFIED to better display error details
 HTML_RESULT = """
 <!DOCTYPE html>
 <html lang="en">
@@ -78,13 +79,13 @@ HTML_RESULT = """
     <style>
         body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px; }
         .result { font-size: 1.2em; }
-        .error { color: red; }
+        .error { color: red; background-color: #ffebeb; padding: 10px; border-radius: 5px; white-space: pre-wrap; word-wrap: break-word; }
     </style>
 </head>
 <body>
     <h2>Test Result</h2>
     {% if error %}
-        <p class="error">{{ error }}</p>
+        <p class="error"><strong>Error:</strong><br>{{ error }}</p>
     {% else %}
         <p class="result">✅ Message Delivered!</p>
         <p><strong>Message ID:</strong> {{ message_id }}</p>
@@ -149,7 +150,10 @@ def send_sms(destination_number, test_id):
         if response.status_code == 202:
             results[test_id]["start_time"] = time.time()
         else:
-            results[test_id]["error"] = f"API Error: {response.status_code} - {response.text}"
+            # ✨ FIX: Capture the detailed error from Bandwidth's response
+            error_details = response.json()
+            error_description = error_details.get('description', 'No description provided.')
+            results[test_id]["error"] = f"API Error (Status {response.status_code}):\n{error_description}"
             results[test_id]["event"].set()
     except Exception as e:
         results[test_id]["error"] = f"Request Error: {e}"
@@ -158,5 +162,3 @@ def send_sms(destination_number, test_id):
 # This block is only for local development and will not be used by Gunicorn on Render
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")
-    print("To run locally for testing: flask --app your_script_name --debug run")
-    # For local testing with ngrok, you would re-add the ngrok code here.

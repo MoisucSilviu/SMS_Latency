@@ -16,7 +16,7 @@ BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
 BANDWIDTH_APP_ID = os.getenv("BANDWIDTH_APP_ID")
 BANDWIDTH_NUMBER = os.getenv("BANDWIDTH_NUMBER")
-MEDIA_URL = os.getenv("MEDIA_URL", "https://i.imgur.com/example.png") # Changed to a neutral host
+MEDIA_URL = os.getenv("MEDIA_URL", "https://i.imgur.com/example.png")
 
 
 # BASIC AUTH CREDENTIALS
@@ -106,7 +106,7 @@ HTML_FORM = """
 </html>
 """
 
-# ✨ MODIFIED to handle the new "sent" status
+# ✨ MODIFIED to display the message ID for the "sent" status
 HTML_RESULT = """
 <!DOCTYPE html>
 <html lang="en">
@@ -126,7 +126,8 @@ HTML_RESULT = """
         <p class="error"><strong>Error:</strong><br>{{ error }}</p>
     {% elif status == 'sent' %}
         <p class="result sent">✅ Message Sent Successfully!</p>
-        <p>A 'message-delivered' report was not received within 60 seconds.</p>
+        <p><strong>Message ID:</strong> {{ message_id }}</p>
+        <p>A 'message-delivered' report was not received within the timeout period.</p>
     {% else %}
         <p class="result">✅ Message Delivered!</p>
         <p><strong>Message ID:</strong> {{ message_id }}</p>
@@ -158,23 +159,20 @@ def run_test():
     args = (destination_number, message_type, text_content, media_url, test_id)
     threading.Thread(target=send_message, args=args).start()
     
-    # ✨ MODIFIED: Set a different timeout based on message type
     timeout = 60 if message_type == "mms" else 120
     delivered_in_time = delivery_event.wait(timeout=timeout)
     
     result_data = results.pop(test_id, {})
 
-    # Handle different outcomes
     if result_data.get("error"):
         return render_template_string(HTML_RESULT, error=result_data["error"])
     elif not delivered_in_time:
-        # If it timed out but the API call was successful, show "Sent" status
         if result_data.get("status") == "sent":
-             return render_template_string(HTML_RESULT, status="sent")
+             # ✨ MODIFIED: Pass the message_id to the template for the "sent" status
+             return render_template_string(HTML_RESULT, status="sent", message_id=result_data.get("message_id"))
         else:
              return render_template_string(HTML_RESULT, error=f"TIMEOUT: Did not receive a 'message-delivered' webhook after {timeout} seconds.")
     else:
-        # Success case
         return render_template_string(HTML_RESULT, 
                                       status="delivered",
                                       message_id=result_data.get("message_id"), 
@@ -187,10 +185,10 @@ def handle_webhook():
         if event.get("type") == "message-delivered":
             test_id_from_tag = event.get("message", {}).get("tag")
             if test_id_from_tag in results:
-                start_time = results[test_id_from_tag].get("start_time")
-                if start_time:
-                    results[test_id_from_tag]["latency"] = time.time() - start_time
-                    results[test_id_from_tag]["message_id"] = event.get("message", {}).get("id")
+                # We only need to update the status and set the event.
+                # The message_id was already saved when the message was sent.
+                if results[test_id_from_tag].get("status") == "sent":
+                    results[test_id_from_tag]["latency"] = time.time() - results[test_id_from_tag]["start_time"]
                     results[test_id_from_tag]["status"] = "delivered"
                     results[test_id_from_tag]["event"].set()
     return "OK", 200
@@ -215,9 +213,12 @@ def send_message(destination_number, message_type, text_content, media_url, test
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
         if response.status_code == 202:
-            # ✨ MODIFIED: Set start time and a "sent" status
+            # ✨ MODIFIED: Get message_id from the initial response and save it
+            response_data = response.json()
+            message_id = response_data.get("id")
             results[test_id]["start_time"] = time.time()
             results[test_id]["status"] = "sent"
+            results[test_id]["message_id"] = message_id
         else:
             error_details = response.json()
             error_description = error_details.get('description', 'No description provided.')

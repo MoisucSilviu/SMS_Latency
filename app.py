@@ -6,6 +6,7 @@ import requests
 from flask import Flask, request, render_template_string, Response
 from functools import wraps
 from dotenv import load_dotenv
+from datetime import datetime
 
 # Load environment variables from a .env file
 load_dotenv()
@@ -27,15 +28,10 @@ app = Flask(__name__)
 
 # --- BASIC AUTHENTICATION ---
 def check_auth(username, password):
-    """Checks if the provided username and password are correct."""
     return username == APP_USERNAME and password == APP_PASSWORD
 
 def authenticate():
-    """Sends a 401 Unauthorized response that prompts for login."""
-    return Response(
-        'Could not verify your access level for that URL.\n'
-        'You have to login with proper credentials', 401,
-        {'WWW-Authenticate': 'Basic realm="Login Required"'})
+    return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
 
 def requires_auth(f):
     @wraps(f)
@@ -71,7 +67,7 @@ HTML_HEADER = """
             <li><strong>Bandwidth Tools</strong></li>
         </ul>
         <ul>
-            <li><a href="/">Latency Tester</a></li>
+            <li><a href="/">DLR Tester</a></li>
         </ul>
     </nav>
 """
@@ -82,6 +78,7 @@ HTML_FOOTER = """
 </html>
 """
 
+# ✨ RE-ADDED the Media URL field and the script to toggle it
 HTML_FORM = HTML_HEADER + """
     <article>
         <h2 id="latency">Advanced Messaging DLR Tester</h2>
@@ -91,9 +88,14 @@ HTML_FORM = HTML_HEADER + """
 
             <fieldset>
                 <legend>Message Type</legend>
-                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
-                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" onchange="toggleMediaField()" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms" onchange="toggleMediaField()"> MMS</label>
             </fieldset>
+            
+            <div id="media_url_field" style="display:none;">
+                <label for="media_url">Media URL (for MMS only)</label>
+                <input type="text" id="media_url" name="media_url" placeholder="https://.../image.png">
+            </div>
 
             <label for="message_text">Text Message</label>
             <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
@@ -101,6 +103,17 @@ HTML_FORM = HTML_HEADER + """
             <button type="submit">Run DLR Test</button>
         </form>
     </article>
+    <script>
+        function toggleMediaField() {
+            var mediaField = document.getElementById('media_url_field');
+            if (document.getElementById('mms').checked) {
+                mediaField.style.display = 'block';
+            } else {
+                mediaField.style.display = 'none';
+            }
+        }
+        toggleMediaField();
+    </script>
 """ + HTML_FOOTER
 
 HTML_RESULT = HTML_HEADER + """
@@ -146,20 +159,21 @@ def index():
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
+    # ✨ RE-ADDED getting the media_url from the form
     destination_number = request.form["destination_number"]
     message_type = request.form["message_type"]
     text_content = request.form["message_text"]
+    media_url = request.form.get("media_url")
     test_id = str(time.time())
     
     delivery_event = threading.Event()
     results[test_id] = {"event": delivery_event, "events": {}}
     
-    args = (destination_number, message_type, text_content, test_id)
+    # ✨ RE-ADDED passing media_url to the sending function
+    args = (destination_number, message_type, text_content, media_url, test_id)
     threading.Thread(target=send_message, args=args).start()
     
-    # Wait for the final event (delivered or failed)
     is_complete = delivery_event.wait(timeout=120)
-    
     result_data = results.pop(test_id, {})
     events = result_data.get("events", {})
 
@@ -203,7 +217,8 @@ def handle_webhook():
     return "OK", 200
 
 # --- CORE LOGIC ---
-def send_message(destination_number, message_type, text_content, test_id):
+# ✨ RE-ADDED media_url parameter and logic
+def send_message(destination_number, message_type, text_content, media_url, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     headers = {"Content-Type": "application/json"}
@@ -216,8 +231,8 @@ def send_message(destination_number, message_type, text_content, test_id):
         "tag": test_id
     }
     
-    if message_type == "mms":
-        payload["media"] = ["https://i.imgur.com/e3j2F0u.png"]
+    if message_type == "mms" and media_url:
+        payload["media"] = [media_url]
 
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
@@ -231,6 +246,6 @@ def send_message(destination_number, message_type, text_content, test_id):
         results[test_id]["error"] = f"Request Error: {e}"
         results[test_id]["event"].set()
 
-# This block is for local development and will not be used by Gunicorn
+# This block is only for local development
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

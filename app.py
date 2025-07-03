@@ -78,7 +78,7 @@ HTML_FOOTER = """
 # The Media URL input and its JavaScript have been removed.
 HTML_FORM = HTML_HEADER + """
     <article>
-        <h2>Advanced Messaging DLR Tester</h2>
+        <h2>Messaging Latency Tester</h2>
         <form action="/run_test" method="post">
             <fieldset>
                 <legend>From Number Type</legend>
@@ -98,7 +98,7 @@ HTML_FORM = HTML_HEADER + """
             <label for="message_text">Text Message</label>
             <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
             
-            <button type="submit">Run DLR Test</button>
+            <button type="submit">Run Latency Test</button>
         </form>
     </article>
 """ + HTML_FOOTER

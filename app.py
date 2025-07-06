@@ -33,7 +33,6 @@ APP_USERNAME = os.getenv("APP_USERNAME", "admin")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "password")
 
 # --- GLOBAL VARIABLES & APP SETUP ---
-# Separate dictionaries to track single and bulk tests
 single_test_results = {}
 bulk_results = {}
 app = Flask(__name__)
@@ -92,15 +91,13 @@ HTML_DLR_FORM = HTML_HEADER + """
     <article>
         <h2 id="latency">Advanced Messaging DLR Tester</h2>
         <form action="/run_test" method="post">
-            <fieldset>
-                <legend>From Number Type</legend>
+            <fieldset><legend>From Number Type</legend>
                 <label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label>
                 <label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label>
             </fieldset>
             <label for="destination_number">Destination Phone Number</label>
             <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
-            <fieldset>
-                <legend>Message Type</legend>
+            <fieldset><legend>Message Type</legend>
                 <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
                 <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
             </fieldset>
@@ -117,8 +114,7 @@ HTML_DLR_RESULT = HTML_HEADER + """
             <p class="error"><strong>Error:</strong><br>{{ error }}</p>
         {% elif status == 'sent' %}
             <h3 class="sent">✅ MMS Sent Successfully!</h3>
-            <p><strong>Message ID:</strong> {{ message_id }}</p>
-            <hr>
+            <p><strong>Message ID:</strong> {{ message_id }}</p><hr>
             <p><strong>Note:</strong> A 'message-delivered' report was not received within the 60-second timeout.</p>
         {% else %}
             <h3>DLR Timeline</h3>
@@ -130,13 +126,11 @@ HTML_DLR_RESULT = HTML_HEADER + """
                 {% if events.delivered %}
                 <li><strong>Delivered to Handset</strong> (Leg 2 Latency: {{ "%.2f"|format(events.delivered_latency) }}s)<br>Timestamp: {{ events.get('delivered_str', 'N/A') }}</li>
                 {% endif %}
-            </ul>
-            <hr>
+            </ul><hr>
             <h4>Total End-to-End Latency: {{ "%.2f"|format(events.total_latency) }} seconds</h4>
             <p><strong>Message ID:</strong> {{ message_id }}</p>
         {% endif %}
-        <br>
-        <a href="/" role="button" class="secondary">Run another test</a>
+        <br><a href="/" role="button" class="secondary">Run another test</a>
     </article>
 """ + HTML_FOOTER
 HTML_BULK_FORM = HTML_HEADER + """
@@ -281,7 +275,8 @@ def run_bulk_test():
 @app.route("/bulk_results/<batch_id>")
 @requires_auth
 def bulk_results_page(batch_id):
-    return render_template_string(HTML_BULK_RESULTS, batch_id=batch_id)
+    # ✨ FIX: Corrected the variable name typo
+    return render_template_string(HTML_BULK_RESULTS_PAGE, batch_id=batch_id)
 
 @app.route("/api/bulk_status/<batch_id>")
 @requires_auth
@@ -301,30 +296,30 @@ def handle_webhook():
         test_id_from_tag = message_info.get("tag")
         is_bulk_test = test_id_from_tag.startswith("bulk_")
         results_dict = bulk_results if is_bulk_test else single_test_results
+        target_dict_key = None
         
-        target_batch_id = None
         if is_bulk_test:
             for batch_id, tests in bulk_results.items():
                 if test_id_from_tag in tests:
-                    target_batch_id = batch_id
+                    target_dict_key = batch_id
                     break
-            if not target_batch_id: continue
-            target_dict = results_dict[target_batch_id]
+            if not target_dict_key: continue
+            target_dict = results_dict[target_dict_key]
         else:
             target_dict = results_dict
 
         if test_id_from_tag in target_dict:
             event_type = event.get("type")
+            current_time = time.time()
             if event_type == "message-delivered":
                 if is_bulk_test:
                     start_time = target_dict[test_id_from_tag].get("start_time")
                     if start_time:
-                        target_dict[test_id_from_tag]["latency"] = time.time() - start_time
+                        target_dict[test_id_from_tag]["latency"] = current_time - start_time
                         target_dict[test_id_from_tag]["status"] = "Delivered"
-                else: # Single test
-                    start_time = target_dict[test_id_from_tag].get("events", {}).get("start_time")
-                    if start_time:
-                        target_dict[test_id_from_tag]["events"]["delivered"] = time.time()
+                else: 
+                    if "events" in target_dict[test_id_from_tag]:
+                        target_dict[test_id_from_tag]["events"]["delivered"] = current_time
                         target_dict[test_id_from_tag]["event"].set()
             elif event_type == "message-failed":
                 error_msg = f"Failed: {event.get('description')}"
@@ -334,7 +329,8 @@ def handle_webhook():
                     target_dict[test_id_from_tag]["error"] = error_msg
                     target_dict[test_id_from_tag]["event"].set()
             elif event_type == "message-sending" and not is_bulk_test:
-                target_dict[test_id_from_tag].get("events", {})["sending"] = time.time()
+                if "events" in target_dict[test_id_from_tag]:
+                    target_dict[test_id_from_tag]["events"]["sending"] = current_time
     return "OK", 200
 
 # --- CORE LOGIC ---
@@ -347,42 +343,46 @@ def send_message(from_number, application_id, destination_number, message_type, 
         payload["media"] = [STATIC_MMS_IMAGE_URL]
 
     results_dict = bulk_results if is_bulk else single_test_results
-    target_batch_id = None
+    target_dict_key = None
+
     if is_bulk:
         for batch_id, tests in bulk_results.items():
             if test_id in tests:
-                target_batch_id = batch_id
+                target_dict_key = batch_id
                 break
-        if not target_batch_id: return
-        target_dict = results_dict[target_batch_id]
+        if not target_dict_key: return
+        target_dict = results_dict[target_dict_key]
     else:
         target_dict = results_dict
-
+        
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
         if response.status_code == 202:
             if test_id in target_dict:
+                start_time = time.time()
+                message_id = response.json().get("id")
                 if is_bulk:
-                    target_dict[test_id]["start_time"] = time.time()
+                    target_dict[test_id]["start_time"] = start_time
                     target_dict[test_id]["status"] = "Sent"
                 else:
-                    target_dict[test_id].get("events", {})["start_time"] = time.time()
-                    target_dict[test_id]["message_id"] = response.json().get("id")
+                    target_dict[test_id].setdefault("events", {})["sent"] = start_time
+                    target_dict[test_id]["message_id"] = message_id
         else:
             error_msg = f"API Error ({response.status_code})"
+            if test_id in target_dict:
+                if is_bulk:
+                    target_dict[test_id]["status"] = error_msg
+                else:
+                    target_dict[test_id]["error"] = error_msg
+                    target_dict[test_id]["event"].set()
+    except Exception as e:
+        error_msg = f"Request Error: {e}"
+        if test_id in target_dict:
             if is_bulk:
                 target_dict[test_id]["status"] = error_msg
             else:
                 target_dict[test_id]["error"] = error_msg
                 target_dict[test_id]["event"].set()
-    except Exception as e:
-        error_msg = f"Request Error: {e}"
-        if is_bulk:
-            target_dict[test_id]["status"] = error_msg
-        else:
-            target_dict[test_id]["error"] = error_msg
-            target_dict[test_id]["event"].set()
-
 
 # This block is for local development
 if __name__ == "__main__":

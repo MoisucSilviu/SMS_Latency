@@ -22,7 +22,7 @@ TF_APP_ID = os.getenv("TF_APP_ID")
 TEN_DLC_NUMBER = os.getenv("TEN_DLC_NUMBER")
 TEN_DLC_APP_ID = os.getenv("TEN_DLC_APP_ID")
 
-# ✨ NEW: Comma-separated list of destination numbers for the bulk test
+# Comma-separated list of destination numbers for the bulk test
 DESTINATION_NUMBERS = os.getenv("DESTINATION_NUMBERS", "").split(',')
 
 # Static Image for MMS
@@ -87,11 +87,29 @@ HTML_FORM = HTML_HEADER + """
     <article>
         <h2 id="latency">Advanced Messaging DLR Tester</h2>
         <form action="/run_test" method="post">
-            </form>
+            <fieldset>
+                <legend>From Number Type</legend>
+                <label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label>
+                <label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label>
+            </fieldset>
+
+            <label for="destination_number">Destination Phone Number</label>
+            <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
+
+            <fieldset>
+                <legend>Message Type</legend>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
+            </fieldset>
+
+            <label for="message_text">Text Message</label>
+            <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
+            
+            <button type="submit">Run DLR Test</button>
+        </form>
     </article>
 """ + HTML_FOOTER
 
-# ✨ NEW: HTML for the Bulk Tester page
 HTML_BULK_FORM = HTML_HEADER + """
     <article>
         <h2>Bulk Latency Runner</h2>
@@ -102,7 +120,6 @@ HTML_BULK_FORM = HTML_HEADER + """
         </form>
     </article>
 """ + HTML_FOOTER
-
 HTML_RESULT = HTML_HEADER + """
     <article>
         <h2>Test Result</h2>
@@ -113,10 +130,10 @@ HTML_RESULT = HTML_HEADER + """
 @app.route("/")
 @requires_auth
 def index():
-    # ... (function is unchanged)
-    pass
+    """Serves the main page with the form."""
+    # ✨ FIX: Added the missing return statement
+    return render_template_string(HTML_FORM)
 
-# ✨ NEW: Route to serve the Bulk Tester page
 @app.route("/bulk")
 @requires_auth
 def bulk_tester_page():
@@ -128,7 +145,6 @@ def run_latency_test():
     # ... (function is unchanged)
     pass
 
-# ✨ NEW: Placeholder for the bulk test logic
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth
 def run_bulk_test():

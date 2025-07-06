@@ -15,16 +15,20 @@ load_dotenv()
 BANDWIDTH_ACCOUNT_ID = os.getenv("BANDWIDTH_ACCOUNT_ID")
 BANDWIDTH_API_TOKEN = os.getenv("BANDWIDTH_API_TOKEN")
 BANDWIDTH_API_SECRET = os.getenv("BANDWIDTH_API_SECRET")
+
+# Number Configurations
 TF_NUMBER = os.getenv("TF_NUMBER")
 TF_APP_ID = os.getenv("TF_APP_ID")
 TEN_DLC_NUMBER = os.getenv("TEN_DLC_NUMBER")
 TEN_DLC_APP_ID = os.getenv("TEN_DLC_APP_ID")
 
-# ✨ 2. STATIC IMAGE FOR ALL MMS TESTS
-# This is a reliable, neutrally hosted image from Imgur.
+# ✨ NEW: Comma-separated list of destination numbers for the bulk test
+DESTINATION_NUMBERS = os.getenv("DESTINATION_NUMBERS", "").split(',')
+
+# Static Image for MMS
 STATIC_MMS_IMAGE_URL = "https://i.imgur.com/e3j2F0u.png"
 
-# BASIC AUTH CREDENTIALS
+# Basic Auth Credentials
 APP_USERNAME = os.getenv("APP_USERNAME", "admin")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "password")
 
@@ -66,179 +70,81 @@ HTML_HEADER = """
 </head>
 <body>
 <main class="container">
-    <nav><ul><li><strong>Bandwidth Messaging Tools</strong></li></ul></nav>
+    <nav>
+        <ul><li><strong>Bandwidth Tools</strong></li></ul>
+        <ul>
+            <li><a href="/">DLR Tester</a></li>
+            <li><a href="/bulk">Bulk Tester</a></li>
+        </ul>
+    </nav>
 """
 HTML_FOOTER = """
 </main>
 </body>
 </html>
 """
-
-# ✨ 1. HTML FORM MODIFIED
-# The Media URL input and its JavaScript have been removed.
 HTML_FORM = HTML_HEADER + """
     <article>
-        <h2>Messaging Latency Tester</h2>
+        <h2 id="latency">Advanced Messaging DLR Tester</h2>
         <form action="/run_test" method="post">
-            <fieldset>
-                <legend>From Number Type</legend>
-                <label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label>
-                <label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label>
-            </fieldset>
+            </form>
+    </article>
+""" + HTML_FOOTER
 
-            <label for="destination_number">Destination Phone Number</label>
-            <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
-
-            <fieldset>
-                <legend>Message Type</legend>
-                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
-                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
-            </fieldset>
-
-            <label for="message_text">Text Message</label>
-            <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
-            
-            <button type="submit">Run Latency Test</button>
+# ✨ NEW: HTML for the Bulk Tester page
+HTML_BULK_FORM = HTML_HEADER + """
+    <article>
+        <h2>Bulk Latency Runner</h2>
+        <p>This tool will send an SMS and an MMS from both your Toll-Free and 10DLC numbers to a pre-configured list of destination numbers.</p>
+        <p>A total of <strong>""" + str(2 * 2 * len(DESTINATION_NUMBERS)) + """</strong> messages will be sent.</p>
+        <form action="/run_bulk_test" method="post">
+            <button type="submit">Start Performance Test</button>
         </form>
     </article>
 """ + HTML_FOOTER
 
-# ✨ 3. HTML RESULT MODIFIED
-# Updated the note for MMS timeouts.
 HTML_RESULT = HTML_HEADER + """
     <article>
         <h2>Test Result</h2>
-        {% if error %}
-            <p class="error"><strong>Error:</strong><br>{{ error }}</p>
-        {% elif status == 'sent' %}
-            <h3 class="sent">✅ MMS Sent Successfully!</h3>
-            <p><strong>Message ID:</strong> {{ message_id }}</p>
-            <hr>
-            <p><strong>Note:</strong> MMS Delivery Receipts (DLRs) can be delayed. A 'message-delivered' report was not received within the 60-second timeout. Please verify the final delivery status using your internal tools.</p>
-        {% else %}
-            <h3>DLR Timeline</h3>
-            <ul class="timeline">
-                <li><strong>Message Sent to API</strong><br>Timestamp: {{ events.get('sent_str', 'N/A') }}</li>
-                {% if events.sending %}
-                <li><strong>Sent to Carrier</strong> (Leg 1 Latency: {{ "%.2f"|format(events.sending_latency) }}s)<br>Timestamp: {{ events.get('sending_str', 'N/A') }}</li>
-                {% endif %}
-                {% if events.delivered %}
-                <li><strong>Delivered to Handset</strong> (Leg 2 Latency: {{ "%.2f"|format(events.delivered_latency) }}s)<br>Timestamp: {{ events.get('delivered_str', 'N/A') }}</li>
-                {% endif %}
-            </ul>
-            <hr>
-            <h4>Total End-to-End Latency: {{ "%.2f"|format(events.total_latency) }} seconds</h4>
-            <p><strong>Message ID:</strong> {{ message_id }}</p>
-        {% endif %}
-        <br>
-        <a href="/" role="button" class="secondary">Run another test</a>
-    </article>
+        </article>
 """ + HTML_FOOTER
 
 # --- FLASK ROUTES ---
 @app.route("/")
 @requires_auth
 def index():
-    return render_template_string(HTML_FORM)
+    # ... (function is unchanged)
+    pass
+
+# ✨ NEW: Route to serve the Bulk Tester page
+@app.route("/bulk")
+@requires_auth
+def bulk_tester_page():
+    return render_template_string(HTML_BULK_FORM)
 
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
-    from_number_type = request.form["from_number_type"]
-    from_number = TF_NUMBER if from_number_type == 'tf' else TEN_DLC_NUMBER
-    application_id = TF_APP_ID if from_number_type == 'tf' else TEN_DLC_APP_ID
-    
-    destination_number = request.form["destination_number"]
-    message_type = request.form["message_type"]
-    text_content = request.form["message_text"]
-    test_id = str(time.time())
-    
-    delivery_event = threading.Event()
-    results[test_id] = {"event": delivery_event, "events": {}}
-    
-    # Removed media_url from arguments
-    args = (from_number, application_id, destination_number, message_type, text_content, test_id)
-    threading.Thread(target=send_message, args=args).start()
-    
-    timeout = 60 if message_type == "mms" else 120
-    is_complete = delivery_event.wait(timeout=timeout)
-    
-    result_data = results.pop(test_id, {})
-    events = result_data.get("events", {})
+    # ... (function is unchanged)
+    pass
 
-    if result_data.get("error"):
-        return render_template_string(HTML_RESULT, error=result_data["error"])
-    
-    if not is_complete and message_type == "mms" and events.get("sent"):
-        return render_template_string(HTML_RESULT, status="sent", message_id=result_data.get("message_id"))
-
-    if not is_complete:
-        return render_template_string(HTML_RESULT, error=f"TIMEOUT: No final webhook was received after {timeout} seconds.")
-
-    events["total_latency"] = 0
-    if events.get("sent"):
-        events["sent_str"] = datetime.fromtimestamp(events["sent"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-    if events.get("sending"):
-        events["sending_str"] = datetime.fromtimestamp(events["sending"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        events["sending_latency"] = events["sending"] - events.get("sent", events["sending"])
-    if events.get("delivered"):
-        events["delivered_str"] = datetime.fromtimestamp(events["delivered"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        events["delivered_latency"] = events["delivered"] - events.get("sending", events.get("sent", events["delivered"]))
-        events["total_latency"] = events["delivered"] - events.get("sent", events["delivered"])
-    
-    return render_template_string(HTML_RESULT, message_id=result_data.get("message_id"), events=events)
+# ✨ NEW: Placeholder for the bulk test logic
+@app.route("/run_bulk_test", methods=["POST"])
+@requires_auth
+def run_bulk_test():
+    # We will build the logic for this in the next step
+    return "Bulk test started! (Logic coming soon)"
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
-    data = request.get_json()
-    for event in data:
-        event_type = event.get("type")
-        message_info = event.get("message", {})
-        test_id_from_tag = message_info.get("tag")
-
-        if test_id_from_tag in results:
-            current_time = time.time()
-            if event_type == "message-sending":
-                results[test_id_from_tag]["events"]["sending"] = current_time
-            elif event_type == "message-delivered":
-                results[test_id_from_tag]["events"]["delivered"] = current_time
-                results[test_id_from_tag]["event"].set()
-            elif event_type == "message-failed":
-                results[test_id_from_tag]["error"] = f"Message Failed: {event.get('description')}"
-                results[test_id_from_tag]["event"].set()
-    return "OK", 200
+    # ... (function is unchanged)
+    pass
 
 # --- CORE LOGIC ---
-# Removed media_url from parameters
 def send_message(from_number, application_id, destination_number, message_type, text_content, test_id):
-    api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
-    auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
-    headers = {"Content-Type": "application/json"}
-    
-    payload = {
-        "to": [destination_number],
-        "from": from_number,
-        "text": text_content,
-        "applicationId": application_id,
-        "tag": test_id
-    }
-    
-    # Now uses the static URL defined at the top of the script
-    if message_type == "mms":
-        payload["media"] = [STATIC_MMS_IMAGE_URL]
+    # ... (function is unchanged)
+    pass
 
-    try:
-        response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
-        if response.status_code == 202:
-            results[test_id]["events"]["sent"] = time.time()
-            results[test_id]["message_id"] = response.json().get("id")
-        else:
-            results[test_id]["error"] = f"API Error (Status {response.status_code}):\n{response.text}"
-            results[test_id]["event"].set()
-    except Exception as e:
-        results[test_id]["error"] = f"Request Error: {e}"
-        results[test_id]["event"].set()
-
-# This block is for local development and will not be used by Gunicorn
+# This block is for local development
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

@@ -1,9 +1,10 @@
 import os
+import re
 import sys
 import time
 import threading
 import requests
-from flask import Flask, request, render_template_string, Response
+from flask import Flask, request, render_template_string, Response, redirect, url_for, jsonify
 from functools import wraps
 from dotenv import load_dotenv
 from datetime import datetime
@@ -22,8 +23,14 @@ TF_APP_ID = os.getenv("TF_APP_ID")
 TEN_DLC_NUMBER = os.getenv("TEN_DLC_NUMBER")
 TEN_DLC_APP_ID = os.getenv("TEN_DLC_APP_ID")
 
-# Comma-separated list of destination numbers for the bulk test
-DESTINATION_NUMBERS = [num.strip() for num in os.getenv("DESTINATION_NUMBERS", "").split(',') if num.strip()]
+# ✨ NEW: Parses numbers and names from the format "+1... (Name)"
+def parse_destinations(dest_str):
+    if not dest_str:
+        return []
+    # Regex to find a number and an optional name in parentheses
+    return re.findall(r'(\+\d{11})\s*(?:\(([^)]+)\))?', dest_str)
+DESTINATION_NUMBERS = parse_destinations(os.getenv("DESTINATION_NUMBERS", ""))
+
 
 # Static Image for MMS
 STATIC_MMS_IMAGE_URL = "https://i.imgur.com/e3j2F0u.png"
@@ -33,10 +40,12 @@ APP_USERNAME = os.getenv("APP_USERNAME", "admin")
 APP_PASSWORD = os.getenv("APP_PASSWORD", "password")
 
 # --- GLOBAL VARIABLES & APP SETUP ---
-results = {}
+# This will now store results by a "batch ID" for each bulk run
+bulk_results = {}
 app = Flask(__name__)
 
 # --- BASIC AUTHENTICATION ---
+# ... (Authentication code remains the same) ...
 def check_auth(username, password):
     return username == APP_USERNAME and password == APP_PASSWORD
 def authenticate():
@@ -50,6 +59,7 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
+
 # --- HTML TEMPLATES & STYLES ---
 HTML_HEADER = """
 <!DOCTYPE html>
@@ -61,18 +71,17 @@ HTML_HEADER = """
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
     <style>
         body > main { padding: 2rem; }
-        .error { background-color: var(--pico-form-element-invalid-background-color); color: var(--pico-form-element-invalid-color); padding: 1rem; border-radius: var(--pico-border-radius); }
         .highlight { background-color: var(--pico-color-green-100); }
+        .nav { margin-bottom: 20px; padding-bottom: 10px; border-bottom: 1px solid #ccc; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin-top: 10px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 <main class="container">
     <nav>
         <ul><li><strong>Bandwidth Tools</strong></li></ul>
-        <ul>
-            <li><a href="/">DLR Tester</a></li>
-            <li><a href="/bulk">Bulk Tester</a></li>
-        </ul>
+        <ul><li><a href="/">Bulk Tester</a></li></ul>
     </nav>
 """
 HTML_FOOTER = """
@@ -80,165 +89,193 @@ HTML_FOOTER = """
 </body>
 </html>
 """
-HTML_FORM = HTML_HEADER + """
-    <article>
-        <h2 id="latency">Advanced Messaging DLR Tester</h2>
-        <form action="/run_test" method="post">
-            <fieldset>
-                <legend>From Number Type</legend>
-                <label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label>
-                <label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label>
-            </fieldset>
 
-            <label for="destination_number">Destination Phone Number</label>
-            <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
-
-            <fieldset>
-                <legend>Message Type</legend>
-                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
-                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
-            </fieldset>
-
-            <label for="message_text">Text Message</label>
-            <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
-            
-            <button type="submit">Run DLR Test</button>
-        </form>
-    </article>
-""" + HTML_FOOTER
 HTML_BULK_FORM = HTML_HEADER + """
     <article>
-        <h2>Bulk Latency Runner</h2>
+        <h2>Bulk Performance Tester</h2>
         <p>This tool will send an SMS and an MMS from both your Toll-Free and 10DLC numbers to the following destinations:</p>
-        <ul>
-        {% for num in numbers %}
-            <li>{{ num }}</li>
-        {% endfor %}
-        </ul>
-        <p>A total of <strong>""" + str(2 * 2 * len(DESTINATION_NUMBERS)) + """</strong> messages will be sent.</p>
+        {% if numbers %}
+            <ul>
+            {% for number, name in numbers %}
+                <li>{{ number }} {% if name %}({{ name }}){% endif %}</li>
+            {% endfor %}
+            </ul>
+        {% else %}
+            <p><em>No destination numbers configured. Please set the DESTINATION_NUMBERS environment variable.</em></p>
+        {% endif %}
         <form action="/run_bulk_test" method="post">
-            <button type="submit">Start Performance Test</button>
+            <button type="submit" {% if not numbers %}disabled{% endif %}>Start Performance Test</button>
         </form>
     </article>
 """ + HTML_FOOTER
-HTML_BULK_RESULT = HTML_HEADER + """
-    <article>
-        <h2>Bulk Test Results</h2>
-        {% if best_result %}
-            <mark><strong>Best Performance:</strong> {{ best_result.from_num }} ({{ best_result.type }}) to {{ best_result.to_num }} with a latency of {{ "%.2f"|format(best_result.latency) }}s.</mark>
-        {% endif %}
 
-        <h4>All Results:</h4>
-        <figure>
-        <table>
-            <thead>
-                <tr>
-                    <th>From Number</th>
-                    <th>To Number</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Latency (s)</th>
-                </tr>
-            </thead>
-            <tbody>
-            {% for result in results %}
-                <tr class="{{ 'highlight' if result.is_best else '' }}">
-                    <td>{{ result.from_num }}</td>
-                    <td>{{ result.to_num }}</td>
-                    <td>{{ result.type }}</td>
-                    <td>{{ result.status }}</td>
-                    <td>{{ "%.2f"|format(result.latency) if result.latency is not none else 'N/A' }}</td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-        </figure>
-        <a href="/bulk" role="button" class="secondary">Run another bulk test</a>
+# ✨ NEW: Interactive waiting page with JavaScript polling
+HTML_BULK_RESULTS = HTML_HEADER + """
+    <article id="results-article">
+        <hgroup>
+            <h2>Bulk Test Results</h2>
+            <p id="status-text">Tests in progress... please wait. The page will update automatically.</p>
+        </hgroup>
+        <div class="loader" id="loader"></div>
+        
+        <div id="sms-results" style="display:none;">
+            <h3>SMS Results</h3>
+            <figure><table id="sms-table"></table></figure>
+        </div>
+
+        <div id="mms-results" style="display:none;">
+            <h3>MMS Results</h3>
+            <figure><table id="mms-table"></table></figure>
+        </div>
+        
+        <br>
+        <a href="/" role="button" class="secondary">Run a new test</a>
     </article>
+    <script>
+        const batchId = '{{ batch_id }}';
+        
+        function buildTable(data, tableId) {
+            let table = document.getElementById(tableId);
+            table.innerHTML = `<thead><tr><th>From</th><th>To</th><th>Carrier</th><th>Status</th><th>Latency (s)</th></tr></thead>`;
+            let tbody = document.createElement('tbody');
+            
+            // Highlight the best result
+            let bestLatency = Infinity;
+            if (data.length > 0) {
+                const delivered = data.filter(r => r.latency !== null);
+                if (delivered.length > 0) {
+                    bestLatency = Math.min(...delivered.map(r => r.latency));
+                }
+            }
+
+            for (const row of data) {
+                let tr = document.createElement('tr');
+                if (row.latency === bestLatency) {
+                    tr.classList.add('highlight');
+                }
+                tr.innerHTML = `<td>${row.from_num}</td>
+                                <td>${row.to_num}</td>
+                                <td>${row.carrier_name}</td>
+                                <td>${row.status}</td>
+                                <td>${row.latency !== null ? row.latency.toFixed(2) : 'N/A'}</td>`;
+                tbody.appendChild(tr);
+            }
+            table.appendChild(tbody);
+        }
+
+        const interval = setInterval(() => {
+            fetch(`/api/bulk_status/${batchId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.sms_results.length > 0) {
+                        document.getElementById('sms-results').style.display = 'block';
+                        buildTable(data.sms_results, 'sms-table');
+                    }
+                    if (data.mms_results.length > 0) {
+                        document.getElementById('mms-results').style.display = 'block';
+                        buildTable(data.mms_results, 'mms-table');
+                    }
+
+                    if (data.is_complete) {
+                        document.getElementById('loader').style.display = 'none';
+                        document.getElementById('status-text').innerText = 'All tests are complete.';
+                        clearInterval(interval);
+                    }
+                });
+        }, 3000); // Poll every 3 seconds
+    </script>
 """ + HTML_FOOTER
+
 
 # --- FLASK ROUTES ---
 @app.route("/")
 @requires_auth
 def index():
-    # ✨ FIX: Added the missing return statement here
-    return render_template_string(HTML_FORM)
-
-@app.route("/bulk")
-@requires_auth
-def bulk_tester_page():
     return render_template_string(HTML_BULK_FORM, numbers=DESTINATION_NUMBERS)
-
-@app.route("/run_test", methods=["POST"])
-@requires_auth
-def run_latency_test():
-    # This route is for the single DLR tester, which we can simplify or remove
-    # For now, let's just redirect to the main page to avoid confusion
-    return redirect(url_for('index'))
 
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth
 def run_bulk_test():
-    from_numbers = {
-        "TF": {"number": TF_NUMBER, "appId": TF_APP_ID},
-        "10DLC": {"number": TEN_DLC_NUMBER, "appId": TEN_DLC_APP_ID}
-    }
+    batch_id = f"batch_{time.time()}"
+    bulk_results[batch_id] = {}
+    
+    from_numbers = [
+        {"name": "TF", "number": TF_NUMBER, "appId": TF_APP_ID},
+        {"name": "10DLC", "number": TEN_DLC_NUMBER, "appId": TEN_DLC_APP_ID}
+    ]
     message_types = ["sms", "mms"]
-    batch_test_ids = []
-
-    for dest_num in DESTINATION_NUMBERS:
-        for from_name, from_data in from_numbers.items():
+    
+    for dest_num, carrier_name in DESTINATION_NUMBERS:
+        for from_data in from_numbers:
             for msg_type in message_types:
-                test_id = f"bulk_{time.time()}_{len(batch_test_ids)}"
-                batch_test_ids.append(test_id)
-                results[test_id] = {
+                test_id = f"test_{time.time()}_{len(bulk_results[batch_id])}"
+                bulk_results[batch_id][test_id] = {
                     "from_num": from_data["number"],
                     "to_num": dest_num,
+                    "carrier_name": carrier_name or 'N/A',
                     "type": msg_type.upper(),
                     "status": "Sending...",
                     "latency": None
                 }
-                args = (from_data["number"], from_data["appId"], dest_num, msg_type, f"{from_name} {msg_type.upper()} Test", test_id)
+                args = (batch_id, test_id, from_data["number"], from_data["appId"], dest_num, msg_type, f"{from_data['name']} {msg_type.upper()} Test")
                 threading.Thread(target=send_message, args=args).start()
 
-    time.sleep(125)
+    return redirect(url_for('bulk_results_page', batch_id=batch_id))
 
-    final_results = []
-    best_result = None
-    for test_id in batch_test_ids:
-        result = results.pop(test_id, None)
-        if result:
-            if result.get("status") == "Delivered" and (best_result is None or result.get("latency", float('inf')) < best_result.get("latency", float('inf'))):
-                best_result = result
-            final_results.append(result)
+# ✨ NEW: Page to display interactive results
+@app.route("/bulk_results/<batch_id>")
+@requires_auth
+def bulk_results_page(batch_id):
+    return render_template_string(HTML_BULK_RESULTS, batch_id=batch_id)
+
+# ✨ NEW: API endpoint for JavaScript to poll for status updates
+@app.route("/api/bulk_status/<batch_id>")
+@requires_auth
+def api_bulk_status(batch_id):
+    batch = bulk_results.get(batch_id, {})
+    all_tests = list(batch.values())
     
-    if best_result:
-        for result in final_results:
-            result["is_best"] = (result.get("latency") is not None and result.get("latency") == best_result.get("latency"))
+    # Check if all tests are in a final state
+    is_complete = all(r['status'] not in ['Sending...', 'Sent'] for r in all_tests)
+    
+    # Separate and sort results
+    sms_results = sorted([r for r in all_tests if r['type'] == 'SMS'], key=lambda x: (x['latency'] is None, x['latency']))
+    mms_results = sorted([r for r in all_tests if r['type'] == 'MMS'], key=lambda x: (x['latency'] is None, x['latency']))
 
-    return render_template_string(HTML_BULK_RESULT, results=final_results, best_result=best_result)
+    return jsonify({
+        "is_complete": is_complete,
+        "sms_results": sms_results,
+        "mms_results": mms_results
+    })
+
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
     data = request.get_json()
     for event in data:
-        event_type = event.get("type")
         message_info = event.get("message", {})
         test_id_from_tag = message_info.get("tag")
-
-        if test_id_from_tag in results:
+        
+        # Find which batch this test belongs to
+        target_batch_id = None
+        for batch_id, tests in bulk_results.items():
+            if test_id_from_tag in tests:
+                target_batch_id = batch_id
+                break
+        
+        if target_batch_id:
+            event_type = event.get("type")
             if event_type == "message-delivered":
-                start_time = results[test_id_from_tag].get("start_time")
+                start_time = bulk_results[target_batch_id][test_id_from_tag].get("start_time")
                 if start_time:
-                    results[test_id_from_tag]["latency"] = time.time() - start_time
-                    results[test_id_from_tag]["status"] = "Delivered"
+                    bulk_results[target_batch_id][test_id_from_tag]["latency"] = time.time() - start_time
+                    bulk_results[target_batch_id][test_id_from_tag]["status"] = "Delivered"
             elif event_type == "message-failed":
-                results[test_id_from_tag]["status"] = f"Failed: {event.get('description')}"
-
+                bulk_results[target_batch_id][test_id_from_tag]["status"] = f"Failed: {event.get('description')}"
     return "OK", 200
 
 # --- CORE LOGIC ---
-def send_message(from_number, application_id, destination_number, message_type, text_content, test_id):
+def send_message(batch_id, test_id, from_number, application_id, destination_number, message_type, text_content):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     headers = {"Content-Type": "application/json"}
@@ -257,15 +294,15 @@ def send_message(from_number, application_id, destination_number, message_type, 
     try:
         response = requests.post(api_url, auth=auth, headers=headers, json=payload, timeout=15)
         if response.status_code == 202:
-            if test_id in results:
-                results[test_id]["start_time"] = time.time()
-                results[test_id]["status"] = "Sent"
+            if batch_id in bulk_results and test_id in bulk_results[batch_id]:
+                bulk_results[batch_id][test_id]["start_time"] = time.time()
+                bulk_results[batch_id][test_id]["status"] = "Sent"
         else:
-            if test_id in results:
-                results[test_id]["status"] = f"API Error ({response.status_code})"
+            if batch_id in bulk_results and test_id in bulk_results[batch_id]:
+                bulk_results[batch_id][test_id]["status"] = f"API Error ({response.status_code})"
     except Exception:
-        if test_id in results:
-            results[test_id]["status"] = "Request Error"
+        if batch_id in bulk_results and test_id in bulk_results[batch_id]:
+            bulk_results[batch_id][test_id]["status"] = "Request Error"
 
 # This block is for local development
 if __name__ == "__main__":

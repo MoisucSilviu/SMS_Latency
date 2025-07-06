@@ -80,6 +80,32 @@ HTML_FOOTER = """
 </body>
 </html>
 """
+HTML_FORM = HTML_HEADER + """
+    <article>
+        <h2 id="latency">Advanced Messaging DLR Tester</h2>
+        <form action="/run_test" method="post">
+            <fieldset>
+                <legend>From Number Type</legend>
+                <label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label>
+                <label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label>
+            </fieldset>
+
+            <label for="destination_number">Destination Phone Number</label>
+            <input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required>
+
+            <fieldset>
+                <legend>Message Type</legend>
+                <label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label>
+                <label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label>
+            </fieldset>
+
+            <label for="message_text">Text Message</label>
+            <textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea>
+            
+            <button type="submit">Run DLR Test</button>
+        </form>
+    </article>
+""" + HTML_FOOTER
 HTML_BULK_FORM = HTML_HEADER + """
     <article>
         <h2>Bulk Latency Runner</h2>
@@ -95,8 +121,6 @@ HTML_BULK_FORM = HTML_HEADER + """
         </form>
     </article>
 """ + HTML_FOOTER
-
-# ✨ NEW: Template for the bulk test results
 HTML_BULK_RESULT = HTML_HEADER + """
     <article>
         <h2>Bulk Test Results</h2>
@@ -137,15 +161,21 @@ HTML_BULK_RESULT = HTML_HEADER + """
 @app.route("/")
 @requires_auth
 def index():
-    # ... (function is unchanged)
-    pass
+    # ✨ FIX: Added the missing return statement here
+    return render_template_string(HTML_FORM)
 
 @app.route("/bulk")
 @requires_auth
 def bulk_tester_page():
     return render_template_string(HTML_BULK_FORM, numbers=DESTINATION_NUMBERS)
 
-# ✨ NEW: Implemented the bulk test logic
+@app.route("/run_test", methods=["POST"])
+@requires_auth
+def run_latency_test():
+    # This route is for the single DLR tester, which we can simplify or remove
+    # For now, let's just redirect to the main page to avoid confusion
+    return redirect(url_for('index'))
+
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth
 def run_bulk_test():
@@ -154,8 +184,6 @@ def run_bulk_test():
         "10DLC": {"number": TEN_DLC_NUMBER, "appId": TEN_DLC_APP_ID}
     }
     message_types = ["sms", "mms"]
-    
-    # Keep track of all test IDs for this bulk run
     batch_test_ids = []
 
     for dest_num in DESTINATION_NUMBERS:
@@ -173,26 +201,22 @@ def run_bulk_test():
                 args = (from_data["number"], from_data["appId"], dest_num, msg_type, f"{from_name} {msg_type.upper()} Test", test_id)
                 threading.Thread(target=send_message, args=args).start()
 
-    # Wait for 2 minutes and 5 seconds for all webhooks to arrive
     time.sleep(125)
 
-    # Process results
     final_results = []
     best_result = None
     for test_id in batch_test_ids:
         result = results.pop(test_id, None)
         if result:
-            if result["status"] == "Delivered" and (best_result is None or result["latency"] < best_result["latency"]):
+            if result.get("status") == "Delivered" and (best_result is None or result.get("latency", float('inf')) < best_result.get("latency", float('inf'))):
                 best_result = result
             final_results.append(result)
     
-    # Mark the best result for highlighting in the table
     if best_result:
         for result in final_results:
-            result["is_best"] = (result.get("latency") == best_result.get("latency"))
+            result["is_best"] = (result.get("latency") is not None and result.get("latency") == best_result.get("latency"))
 
     return render_template_string(HTML_BULK_RESULT, results=final_results, best_result=best_result)
-
 
 @app.route("/webhook", methods=["POST"])
 def handle_webhook():
@@ -239,7 +263,7 @@ def send_message(from_number, application_id, destination_number, message_type, 
         else:
             if test_id in results:
                 results[test_id]["status"] = f"API Error ({response.status_code})"
-    except Exception as e:
+    except Exception:
         if test_id in results:
             results[test_id]["status"] = "Request Error"
 

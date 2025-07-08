@@ -1,11 +1,9 @@
 services:
-  # This defines your web service
   - type: web
     name: sms-latency-app
-    # This tells Render to use the Dockerfile in your repository
     runtime: docker
-    # Ensure this matches your repository URL
+    plan: free  # ✨ ADD THIS LINE
     repo: https://github.com/MoisucSilviu/SMS_Latency
     branch: main
-    # Health check path for Render to know your service is live
     healthCheckPath: /
+    dockerfilePath: ./Dockerfile

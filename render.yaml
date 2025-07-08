@@ -1,9 +1,12 @@
+# render.yaml
+
 services:
   - type: web
     name: sms-latency-app
     runtime: docker
-    plan: free  # ✨ ADD THIS LINE
+    plan: free
     repo: https://github.com/MoisucSilviu/SMS_Latency
     branch: main
-    healthCheckPath: /
+    # ✨ UPDATE THIS LINE
+    healthCheckPath: /health
     dockerfilePath: ./Dockerfile

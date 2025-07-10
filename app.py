@@ -194,6 +194,7 @@ def dashboard():
 
 @app.route("/health")
 def health_check():
+    """A simple, unprotected health check endpoint for Render."""
     return "OK", 200
 
 @app.route("/run_test", methods=["POST"])

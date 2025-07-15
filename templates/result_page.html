@@ -32,12 +32,14 @@
         {# --- DLR TEST RESULT --- #}
         {% if result_type == 'dlr' %}
             <h2>Test Result</h2>
-            {% if error %}
-                <p class="error"><strong>Error:</strong><br>{{ error }}</p>
-            {% elif status == 'sent' %}
+            {% if result_data.error %}
+                <p class="error"><strong>Error:</strong><br>{{ result_data.error }}</p>
+            {% elif not is_complete and message_type == "mms" and result_data.events.get("sent") %}
                 <h3 class="sent">✅ MMS Sent Successfully!</h3>
-                <p><strong>Message ID:</strong> {{ message_id }}</p><hr>
+                <p><strong>Message ID:</strong> {{ result_data.message_id }}</p><hr>
                 <p><strong>Note:</strong> A 'message-delivered' report was not received within the 60-second timeout.</p>
+            {% elif not is_complete %}
+                <p class="error"><strong>Error:</strong><br>TIMEOUT: No final webhook was received.</p>
             {% else %}
                 <h3>DLR Timeline</h3>
                 <ul class="timeline">
@@ -48,19 +50,67 @@
                 <h4>Total End-to-End Latency: {{ "%.2f"|format(events.total_latency) }} seconds</h4>
                 <p><strong>Message ID:</strong> {{ message_id }}</p>
             {% endif %}<br><a href="/" role="button" class="secondary">Back to Dashboard</a>
-
+        
         {# --- BULK TEST RESULT --- #}
         {% elif result_type == 'bulk' %}
             <div id="results-article"><hgroup><h2>Bulk Test Results</h2><p id="status-text">Tests in progress...</p></hgroup><div class="loader" id="loader"></div><div class="grid"><div id="sms-10dlc-results" style="display:none;"><h3>SMS Results (10DLC)</h3><figure><table id="sms-10dlc-table"></table></figure></div><div id="sms-tf-results" style="display:none;"><h3>SMS Results (Toll-Free)</h3><figure><table id="sms-tf-table"></table></figure></div></div><div class="grid"><div id="mms-10dlc-results" style="display:none;"><h3>MMS Results (10DLC)</h3><figure><table id="mms-10dlc-table"></table></figure></div><div id="mms-tf-results" style="display:none;"><h3>MMS Results (Toll-Free)</h3><figure><table id="mms-tf-table"></table></figure></div></div><br><a href="/" role="button" class="secondary">Back to Dashboard</a></div>
             <script>
-                // ... (JavaScript for bulk results is unchanged) ...
+                const batchId = '{{ batch_id }}';
+                function buildTable(data, tableId) {
+                    let table = document.getElementById(tableId);
+                    table.innerHTML = `<thead><tr><th>To</th><th>Carrier</th><th>Status</th><th>Latency (s)</th></tr></thead>`;
+                    let tbody = document.createElement('tbody');
+                    let bestLatency = Infinity;
+                    if (data.length > 0) { const delivered = data.filter(r => r.latency !== null); if (delivered.length > 0) { bestLatency = Math.min(...delivered.map(r => r.latency)); }}
+                    for (const row of data) {
+                        let tr = document.createElement('tr');
+                        if (row.latency === bestLatency) { tr.classList.add('highlight'); }
+                        tr.innerHTML = `<td>${row.to_num}</td><td>${row.carrier_name}</td><td>${row.status}</td><td>${row.latency !== null ? row.latency.toFixed(2) : 'N/A'}</td>`;
+                        tbody.appendChild(tr);
+                    }
+                    table.appendChild(tbody);
+                }
+                function updateResults(data) {
+                    const sections = {"sms-10dlc": data.sms.dlc, "sms-tf": data.sms.tf, "mms-10dlc": data.mms.dlc, "mms-tf": data.mms.tf};
+                    for (const key in sections) { if (sections[key].length > 0) { document.getElementById(key + '-results').style.display = 'block'; buildTable(sections[key], key + '-table'); }}
+                }
+                const interval = setInterval(() => {
+                    fetch(`/api/bulk_status/${batchId}`).then(response => response.json()).then(data => {
+                        updateResults(data.results);
+                        if (data.is_complete) {
+                            document.getElementById('loader').style.display = 'none';
+                            document.getElementById('status-text').innerText = 'All tests are complete.';
+                            clearInterval(interval);
+                        }
+                    });
+                }, 3000);
             </script>
         
         {# --- ANALYSIS RESULT --- #}
         {% elif result_type == 'analysis' %}
             <div id="results-article"><hgroup><h2>Analysis Report</h2><p id="status-text">Analysis in progress...</p></hgroup><div class="loader" id="loader"></div><div id="analysis-content" style="display:none;"></div></div>
             <script>
-                // ... (JavaScript for analysis results is unchanged) ...
+                const analysisId = '{{ analysis_id }}';
+                const analysisInterval = setInterval(() => {
+                    fetch(`/api/analysis_status/${analysisId}`).then(response => response.json()).then(data => {
+                        if (data.status === 'complete') {
+                            document.getElementById('loader').style.display = 'none';
+                            document.getElementById('status-text').innerText = 'Analysis complete.';
+                            const contentDiv = document.getElementById('analysis-content');
+                            if (data.error) {
+                                contentDiv.innerHTML = `<p class="error"><strong>Error:</strong> ${data.error}</p>`;
+                            } else {
+                                let technicalChecksHtml = '<h4>Technical Details</h4><ul>' + data.checks.map(c => `<li>${c.icon} ${c.message}</li>`).join('') + '</ul>';
+                                let spamChecksHtml = '<h4>Spam Risk Analysis</h4><ul>' + data.spam_checks.map(c => `<li>${c.icon} ${c.message}</li>`).join('') + '</ul>';
+                                let carrierHtml = '<h4>Carrier Compatibility</h4><figure><table><thead><tr><th>Carrier</th><th>Status</th><th>Note</th></tr></thead><tbody>' + data.analysis.map(c => `<tr><td><strong>${c.name}</strong></td><td>${c.status === 'OK' ? '✅ OK' : '❌ REJECT'}</td><td>${c.note}</td></tr>`).join('') + '</tbody></table></figure>';
+                                let previewHtml = data.show_preview ? `<hr><h4>Media Preview</h4><figure><img src="${data.url}" alt="Media Preview" style="max-width:100%;"></figure>` : '';
+                                contentDiv.innerHTML = `<hgroup><p><strong>URL:</strong> <a href="${data.url}" target="_blank" style="word-break:break-all;">${data.url}</a></p></hgroup><div class="grid-2">${technicalChecksHtml}${spamChecksHtml}</div>${carrierHtml}${previewHtml}`;
+                            }
+                            contentDiv.style.display = 'block';
+                            clearInterval(analysisInterval);
+                        }
+                    });
+                }, 2000);
             </script>
         {% endif %}
     </article>

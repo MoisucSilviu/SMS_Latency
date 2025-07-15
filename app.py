@@ -73,6 +73,8 @@ def get_messages():
 def health_check():
     return "OK", 200
 
+# app.py
+
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
@@ -90,7 +92,28 @@ def run_latency_test():
     timeout = 60 if message_type == "mms" else 120
     is_complete = delivery_event.wait(timeout=timeout)
     result_data = active_tests.pop(test_id, {})
-    return render_template('result_page.html', result_type='dlr', result_data=result_data, is_complete=is_complete, message_type=message_type)
+    events = result_data.get("events", {})
+
+    if result_data.get("error"):
+        return render_template('result_page.html', result_type='dlr', error=result_data["error"])
+    if not is_complete and message_type == "mms" and events.get("sent"):
+        return render_template('result_page.html', result_type='dlr', status="sent", message_id=result_data.get("message_id"))
+    if not is_complete:
+        return render_template('result_page.html', result_type='dlr', error=f"TIMEOUT: No final webhook was received after {timeout} seconds.")
+    
+    # Calculate latencies and add them to the events dictionary
+    events["total_latency"] = 0
+    if events.get("sent"): events["sent_str"] = datetime.fromtimestamp(events["sent"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    if events.get("sending"):
+        events["sending_str"] = datetime.fromtimestamp(events["sending"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        events["sending_latency"] = events["sending"] - events.get("sent", 0)
+    if events.get("delivered"):
+        events["delivered_str"] = datetime.fromtimestamp(events["delivered"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        events["delivered_latency"] = events["delivered"] - events.get("sending", events.get("sent", 0))
+        events["total_latency"] = events["delivered"] - events.get("sent", 0)
+    
+    # ✨ FIX: Pass the 'events' dictionary directly to the template
+    return render_template('result_page.html', result_type='dlr', message_id=result_data.get("message_id"), events=events)
 
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth

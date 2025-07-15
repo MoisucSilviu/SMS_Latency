@@ -13,7 +13,7 @@ from datetime import datetime
 from PIL import Image
 import pytesseract
 
-# Load environment variables from a .env file
+# Load environment variables
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -142,7 +142,6 @@ def api_bulk_status(batch_id):
             results_payload[msg_type][num_type].sort(key=lambda x: (x['latency'] is None, x['latency']))
     return jsonify({"is_complete": is_complete, "results": results_payload})
 
-# ✨ ROUTE FOR MMS ANALYSIS TOOL
 @app.route("/run_analysis", methods=["POST"])
 @requires_auth
 def run_analysis():
@@ -283,6 +282,6 @@ def perform_media_analysis(analysis_id, media_url):
     with app.app_context():
         active_tests[analysis_id] = {"status": "complete", "error": error, "url": media_url, "checks": checks, "spam_checks": spam_checks, "analysis": analysis, "show_preview": show_preview}
 
-# --- MAIN EXECUTION ---
+# This block is for local development
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

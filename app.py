@@ -13,7 +13,7 @@ from datetime import datetime
 from PIL import Image
 import pytesseract
 
-# Load environment variables from a .env file
+# Load environment variables
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -41,13 +41,9 @@ app = Flask(__name__, template_folder="templates")
 
 # --- BASIC AUTHENTICATION ---
 def check_auth(username, password):
-    """Checks if the provided username and password are correct."""
     return username == APP_USERNAME and password == APP_PASSWORD
-
 def authenticate():
-    """Sends a 401 Unauthorized response that prompts for login."""
     return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -61,30 +57,25 @@ def requires_auth(f):
 @app.route("/")
 @requires_auth
 def dashboard():
-    """Renders the main dashboard with all tools."""
     return render_template('dashboard.html', numbers=DESTINATION_NUMBERS)
 
 @app.route("/phone")
 @requires_auth
 def phone_simulator_page():
-    """Renders the phone simulator page."""
     return render_template('phone_simulator.html')
 
 @app.route('/get-messages')
 @requires_auth
 def get_messages():
-    """Provides the list of stored messages for the phone simulator."""
     return jsonify(phone_simulator_messages)
 
 @app.route("/health")
 def health_check():
-    """A simple, unprotected health check endpoint for Render."""
     return "OK", 200
 
 @app.route("/run_test", methods=["POST"])
 @requires_auth
 def run_latency_test():
-    """Handles the form submission for the single DLR test."""
     from_number_type = request.form["from_number_type"]
     from_number = TF_NUMBER if from_number_type == 'tf' else TEN_DLC_NUMBER
     application_id = TF_APP_ID if from_number_type == 'tf' else TEN_DLC_APP_ID
@@ -104,7 +95,6 @@ def run_latency_test():
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth
 def run_bulk_test():
-    """Orchestrates the bulk performance test."""
     batch_id = f"batch_{time.time()}"
     active_tests[batch_id] = {"start_time": time.time(), "tests": {}}
     from_numbers = [{"name": "TF", "number": TF_NUMBER, "appId": TF_APP_ID}, {"name": "10DLC", "number": TEN_DLC_NUMBER, "appId": TEN_DLC_APP_ID}]
@@ -125,13 +115,11 @@ def run_bulk_test():
 @app.route("/bulk_results/<batch_id>")
 @requires_auth
 def bulk_results_page(batch_id):
-    """Renders the interactive results page for the bulk test."""
     return render_template('result_page.html', result_type='bulk', batch_id=batch_id)
 
 @app.route("/api/bulk_status/<batch_id>")
 @requires_auth
 def api_bulk_status(batch_id):
-    """API endpoint for JavaScript to poll for bulk test status updates."""
     all_tests = [test for test in active_tests.values() if test.get("batch_id") == batch_id]
     is_complete = all(r['status'] not in ['Sending...', 'Sent'] for r in all_tests)
     batch_start_time = active_tests.get(batch_id, {}).get("start_time", 0)
@@ -157,7 +145,6 @@ def api_bulk_status(batch_id):
 @app.route("/run_analysis", methods=["POST"])
 @requires_auth
 def run_analysis():
-    """Handles the MMS Media Analysis form submission."""
     media_url = request.form["media_url"]
     analysis_id = f"analysis_{time.time()}"
     active_tests[analysis_id] = {"status": "running"}
@@ -167,13 +154,11 @@ def run_analysis():
 @app.route("/analysis_results/<analysis_id>")
 @requires_auth
 def analysis_results_page(analysis_id):
-    """Renders the interactive results page for the MMS Analysis tool."""
     return render_template('result_page.html', result_type='analysis', analysis_id=analysis_id)
 
 @app.route("/api/analysis_status/<analysis_id>")
 @requires_auth
 def api_analysis_status(analysis_id):
-    """API endpoint for JavaScript to poll for analysis status."""
     result = active_tests.get(analysis_id)
     if result and result.get("status") == "complete":
         active_tests.pop(analysis_id, None)
@@ -190,7 +175,7 @@ def handle_webhook():
         event_type = event.get("type")
         if event_type == "message-received":
             process_phone_simulator_webhook(event)
-        else:
+        else: # DLRs for our testing tools
             process_dlr_webhook(event)
     return "OK", 200
 
@@ -225,7 +210,7 @@ def process_dlr_webhook(event):
                 if start_time:
                     test_info["latency"] = time.time() - start_time
                     test_info["status"] = "Delivered"
-                if test_info.get("event"):
+                if test_info.get("event"): # This is a single test
                     test_info.setdefault("events", {})["delivered"] = time.time()
                     test_info["event"].set()
             elif event_type == "message-failed":
@@ -301,6 +286,6 @@ def perform_media_analysis(analysis_id, media_url):
     with app.app_context():
         active_tests[analysis_id] = {"status": "complete", "error": error, "url": media_url, "checks": checks, "spam_checks": spam_checks, "analysis": analysis, "show_preview": show_preview}
 
-# This block is for local development
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

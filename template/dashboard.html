@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Bandwidth Support Dashboard</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    <style>
+        body > main { padding: 2rem; max-width: 1200px; }
+        .error { background-color: var(--pico-form-element-invalid-background-color); color: var(--pico-form-element-invalid-color); padding: 1rem; border-radius: var(--pico-border-radius); }
+        .highlight { background-color: var(--pico-color-green-100); }
+        section[role="tabpanel"] { display: none; padding: 1.5rem 0; border-top: 1px solid var(--pico-muted-border-color);}
+        section[role="tabpanel"].active { display: block; }
+        [role="tab"] { font-weight: bold; }
+        [role="tab"][aria-selected="true"] { background-color: var(--pico-primary-background); }
+    </style>
+</head>
+<body>
+<main class="container">
+    <hgroup><h1>Bandwidth Support Dashboard</h1><p>A unified interface for messaging and analysis tools.</p></hgroup>
+    <div role="tablist" class="grid">
+        <button role="tab" data-target="dlr-tester">DLR Tester</button>
+        <button role="tab" data-target="bulk-tester">Bulk Tester</button>
+        <button role="tab" data-target="mms-analyzer">MMS Analysis</button>
+    </div>
+    
+    <section role="tabpanel" id="dlr-tester">
+        <article><h2>Advanced Messaging DLR Tester</h2><form action="/run_test" method="post"><fieldset><legend>From Number Type</legend><label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label><label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label></fieldset><label for="destination_number">Destination Phone Number</label><input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required><fieldset><legend>Message Type</legend><label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label><label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label></fieldset><label for="message_text">Text Message</label><textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea><button type="submit">Run DLR Test</button></form></article>
+    </section>
+    
+    <section role="tabpanel" id="bulk-tester">
+        <article><h2>Bulk Performance Tester</h2><p>This tool will send an SMS and an MMS from both your Toll-Free and 10DLC numbers to the following destinations:</p>{% if numbers %}<ul>{% for number, name in numbers %}<li>{{ number }} {% if name %}({{ name }}){% endif %}</li>{% endfor %}</ul>{% else %}<p><em>No destination numbers configured.</em></p>{% endif %}<form action="/run_bulk_test" method="post"><button type="submit" {% if not numbers %}disabled{% endif %}>Start Performance Test</button></form></article>
+    </section>
+    
+    <section role="tabpanel" id="mms-analyzer">
+        <article><h2>MMS Media Analysis Tool</h2><p>Enter a media URL to check its technical details and compare against carrier limits.</p><form action="/run_analysis" method="post"><label for="media_url">Media URL</label><input type="text" id="media_url" name="media_url" placeholder="https://.../image.png" required><button type="submit">Analyze Media</button></form></article>
+    </section>
+</main>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const tabs = document.querySelectorAll('[role="tab"]');
+        const tabPanels = document.querySelectorAll('[role="tabpanel"]');
+        
+        function activateTab(targetId) {
+            tabs.forEach(t => {
+                const isSelected = t.getAttribute('data-target') === targetId;
+                t.setAttribute('aria-selected', String(isSelected));
+            });
+            tabPanels.forEach(p => {
+                const isSelected = p.getAttribute('id') === targetId;
+                p.classList.toggle('active', isSelected);
+            });
+        }
+        
+        tabs.forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                const targetId = e.target.getAttribute('data-target');
+                window.location.hash = targetId;
+                activateTab(targetId);
+            });
+        });
+
+        const hash = window.location.hash.substring(1);
+        const targetTabId = hash || (tabs.length > 0 ? tabs[0].getAttribute('data-target') : null);
+        if(targetTabId) {
+            activateTab(targetTabId);
+        }
+    });
+</script>
+</body>
+</html>

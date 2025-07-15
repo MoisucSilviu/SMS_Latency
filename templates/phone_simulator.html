@@ -40,23 +40,24 @@
                 const response = await fetch('/get-messages');
                 const messages = await response.json();
                 const chatContainer = document.getElementById('chat-container');
-                
-                if (messages.length === 0) {
-                    chatContainer.innerHTML = '<p style="text-align: center; color: #888;">Waiting for incoming messages...</p>';
+                if (messages.length === 0 && chatContainer.querySelectorAll('.message').length === 0) {
                     return;
                 }
-
-                chatContainer.innerHTML = ''; // Full refresh for simplicity
-                messages.forEach(msg => {
-                    const messageElement = document.createElement('div');
-                    messageElement.classList.add('message', 'received');
-                    let messageContent = `<strong>From: ${msg.from}</strong><br>${msg.text}`;
-                    if (msg.media_content) {
-                        messageContent += `<br><img src="data:image/jpeg;base64,${msg.media_content}" alt="MMS Content">`;
-                    }
-                    messageElement.innerHTML = messageContent;
-                    chatContainer.appendChild(messageElement);
-                });
+                chatContainer.innerHTML = '';
+                if (messages.length === 0) {
+                    chatContainer.innerHTML = '<p style="text-align: center; color: #888;">No messages yet.</p>';
+                } else {
+                    messages.forEach(msg => {
+                        const messageElement = document.createElement('div');
+                        messageElement.classList.add('message', 'received');
+                        let messageContent = `<strong>From: ${msg.from}</strong><br>${msg.text}`;
+                        if (msg.media_content) {
+                            messageContent += `<br><img src="data:image/jpeg;base64,${msg.media_content}" alt="MMS Content">`;
+                        }
+                        messageElement.innerHTML = messageContent;
+                        chatContainer.appendChild(messageElement);
+                    });
+                }
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             } catch (error) {
                 console.error("Error fetching messages:", error);

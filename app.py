@@ -41,9 +41,13 @@ app = Flask(__name__, template_folder="templates")
 
 # --- BASIC AUTHENTICATION ---
 def check_auth(username, password):
+    """Checks if the provided username and password are correct."""
     return username == APP_USERNAME and password == APP_PASSWORD
+
 def authenticate():
+    """Sends a 401 Unauthorized response that prompts for login."""
     return Response('Login Required', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -66,12 +70,12 @@ def phone_simulator_page():
     """Renders the phone simulator page."""
     return render_template('phone_simulator.html')
 
-@app.route("/get-messages")
+@app.route('/get-messages')
 @requires_auth
 def get_messages():
     """Provides the list of stored messages for the phone simulator."""
     return jsonify(phone_simulator_messages)
-    
+
 @app.route("/health")
 def health_check():
     """A simple, unprotected health check endpoint for Render."""
@@ -95,23 +99,7 @@ def run_latency_test():
     timeout = 60 if message_type == "mms" else 120
     is_complete = delivery_event.wait(timeout=timeout)
     result_data = active_tests.pop(test_id, {})
-    events = result_data.get("events", {})
-    if result_data.get("error"):
-        return render_template('result_page.html', result_type='dlr', error=result_data["error"])
-    if not is_complete and message_type == "mms" and events.get("sent"):
-        return render_template('result_page.html', result_type='dlr', status="sent", message_id=result_data.get("message_id"))
-    if not is_complete:
-        return render_template('result_page.html', result_type='dlr', error=f"TIMEOUT: No final webhook was received after {timeout} seconds.")
-    events["total_latency"] = 0
-    if events.get("sent"): events["sent_str"] = datetime.fromtimestamp(events["sent"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-    if events.get("sending"):
-        events["sending_str"] = datetime.fromtimestamp(events["sending"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        events["sending_latency"] = events["sending"] - events.get("sent", 0)
-    if events.get("delivered"):
-        events["delivered_str"] = datetime.fromtimestamp(events["delivered"]).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-        events["delivered_latency"] = events["delivered"] - events.get("sending", events.get("sent", 0))
-        events["total_latency"] = events["delivered"] - events.get("sent", 0)
-    return render_template('result_page.html', result_type='dlr', message_id=result_data.get("message_id"), events=events)
+    return render_template('result_page.html', result_type='dlr', result_data=result_data, is_complete=is_complete, message_type=message_type)
 
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth
@@ -202,7 +190,7 @@ def handle_webhook():
         event_type = event.get("type")
         if event_type == "message-received":
             process_phone_simulator_webhook(event)
-        else: # DLRs for our testing tools
+        else:
             process_dlr_webhook(event)
     return "OK", 200
 
@@ -228,17 +216,16 @@ def process_dlr_webhook(event):
     message_info = event.get("message", {})
     test_id_from_tag = message_info.get("tag")
     if not test_id_from_tag: return
-    
-    with app.app_context(): # Ensure we have context for thread-safe operations
+    with app.app_context():
         if test_id_from_tag in active_tests:
             test_info = active_tests[test_id_from_tag]
             event_type = event.get("type")
             if event_type == "message-delivered":
-                start_time = test_info.get("start_time") or test_info.get("events",{}).get("sent")
+                start_time = test_info.get("start_time") or test_info.get("events", {}).get("sent")
                 if start_time:
                     test_info["latency"] = time.time() - start_time
                     test_info["status"] = "Delivered"
-                if test_info.get("event"): # This is a single test
+                if test_info.get("event"):
                     test_info.setdefault("events", {})["delivered"] = time.time()
                     test_info["event"].set()
             elif event_type == "message-failed":
@@ -248,7 +235,7 @@ def process_dlr_webhook(event):
                     test_info["error"] = error_msg
                     test_info["event"].set()
             elif event_type == "message-sending" and test_info.get("events") is not None:
-                 test_info["events"]["sending"] = time.time()
+                test_info["events"]["sending"] = time.time()
 
 def send_message(from_number, application_id, destination_number, message_type, text_content, test_id):
     """Sends a single SMS or MMS message and updates the global state."""
@@ -259,17 +246,16 @@ def send_message(from_number, application_id, destination_number, message_type, 
         payload["media"] = [STATIC_MMS_IMAGE_URL]
     try:
         response = requests.post(api_url, auth=auth, json=payload, timeout=15)
-        response_data = response.json()
         with app.app_context():
             if test_id in active_tests:
                 if response.status_code == 202:
                     active_tests[test_id]["start_time"] = time.time()
                     active_tests[test_id]["status"] = "Sent"
                     if not test_id.startswith("bulk_"):
-                        active_tests[test_id]["message_id"] = response_data.get("id")
+                        active_tests[test_id]["message_id"] = response.json().get("id")
                         active_tests[test_id].setdefault("events", {})["sent"] = active_tests[test_id]["start_time"]
                 else:
-                    error_msg = f"API Error ({response.status_code}): {response_data.get('description', 'Unknown error')}"
+                    error_msg = f"API Error ({response.status_code}): {response.json().get('description', 'Unknown error')}"
                     active_tests[test_id]["status"] = error_msg
                     if active_tests[test_id].get("event"):
                         active_tests[test_id]["error"] = error_msg
@@ -312,7 +298,6 @@ def perform_media_analysis(analysis_id, media_url):
                 spam_checks.append({"icon": "⚠️", "message": "Could not perform OCR analysis."})
     except requests.exceptions.RequestException as e:
         error = f"Could not connect to URL: {e}"
-    
     with app.app_context():
         active_tests[analysis_id] = {"status": "complete", "error": error, "url": media_url, "checks": checks, "spam_checks": spam_checks, "analysis": analysis, "show_preview": show_preview}
 

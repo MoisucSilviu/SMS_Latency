@@ -13,7 +13,7 @@ from datetime import datetime
 from PIL import Image
 import pytesseract
 
-# Load environment variables
+# Load environment variables from a .env file
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -36,7 +36,9 @@ CARRIER_LIMITS = {"AT&T": 1000, "T-Mobile": 1000, "Verizon": 1200, "Toll-Free": 
 
 # --- GLOBAL VARIABLES & APP SETUP ---
 active_tests = {}
+active_tests_lock = threading.Lock()
 phone_simulator_messages = []
+phone_simulator_lock = threading.Lock()
 app = Flask(__name__, template_folder="templates")
 
 # --- BASIC AUTHENTICATION ---
@@ -67,7 +69,8 @@ def phone_simulator_page():
 @app.route('/get-messages')
 @requires_auth
 def get_messages():
-    return jsonify(phone_simulator_messages)
+    with phone_simulator_lock:
+        return jsonify(phone_simulator_messages)
 
 @app.route("/health")
 def health_check():
@@ -84,32 +87,44 @@ def run_latency_test():
     text_content = request.form["message_text"]
     test_id = f"single_{time.time()}"
     delivery_event = threading.Event()
-    active_tests[test_id] = {"event": delivery_event, "events": {}}
+    
+    with active_tests_lock:
+        active_tests[test_id] = {"event": delivery_event, "events": {}}
+        
     args = (from_number, application_id, destination_number, message_type, text_content, test_id)
     threading.Thread(target=send_message, args=args).start()
+    
     timeout = 60 if message_type == "mms" else 120
     is_complete = delivery_event.wait(timeout=timeout)
-    result_data = active_tests.pop(test_id, {})
+    
+    with active_tests_lock:
+        result_data = active_tests.pop(test_id, {})
+        
     return render_template('result_page.html', result_type='dlr', result_data=result_data, is_complete=is_complete, message_type=message_type)
 
 @app.route("/run_bulk_test", methods=["POST"])
 @requires_auth
 def run_bulk_test():
     batch_id = f"batch_{time.time()}"
-    active_tests[batch_id] = {"start_time": time.time(), "tests": {}}
+    with active_tests_lock:
+        active_tests[batch_id] = {"start_time": time.time(), "tests": {}}
+    
     from_numbers = [{"name": "TF", "number": TF_NUMBER, "appId": TF_APP_ID}, {"name": "10DLC", "number": TEN_DLC_NUMBER, "appId": TEN_DLC_APP_ID}]
     message_types = ["sms", "mms"]
+
     for dest_num, carrier_name in DESTINATION_NUMBERS:
         for from_data in from_numbers:
             for msg_type in message_types:
-                test_id = f"bulk_{time.time()}_{len(active_tests[batch_id]['tests'])}"
-                active_tests[test_id] = {
-                    "batch_id": batch_id, "from_name": from_data["name"], "from_num": from_data["number"],
-                    "to_num": dest_num, "carrier_name": carrier_name or 'N/A', "type": msg_type.upper(),
-                    "status": "Sending...", "latency": None
-                }
+                test_id = f"bulk_{time.time()}_{len(active_tests)}"
+                with active_tests_lock:
+                    active_tests[test_id] = {
+                        "batch_id": batch_id, "from_name": from_data["name"], "from_num": from_data["number"],
+                        "to_num": dest_num, "carrier_name": carrier_name or 'N/A', "type": msg_type.upper(),
+                        "status": "Sending...", "latency": None
+                    }
                 args = (from_data["number"], from_data["appId"], dest_num, msg_type, f"{from_data['name']} {msg_type.upper()} Test", test_id)
                 threading.Thread(target=send_message, args=args).start()
+
     return redirect(url_for('bulk_results_page', batch_id=batch_id))
 
 @app.route("/bulk_results/<batch_id>")
@@ -120,26 +135,34 @@ def bulk_results_page(batch_id):
 @app.route("/api/bulk_status/<batch_id>")
 @requires_auth
 def api_bulk_status(batch_id):
-    all_tests = [test for test in active_tests.values() if test.get("batch_id") == batch_id]
-    is_complete = all(r['status'] not in ['Sending...', 'Sent'] for r in all_tests)
-    batch_start_time = active_tests.get(batch_id, {}).get("start_time", 0)
-    if not is_complete and batch_start_time and (time.time() - batch_start_time > 125):
-        is_complete = True
+    with active_tests_lock:
+        all_tests = [test for test in active_tests.values() if test.get("batch_id") == batch_id]
+        is_complete = all(r['status'] not in ['Sending...', 'Sent'] for r in all_tests)
+        
+        batch_start_time = active_tests.get(batch_id, {}).get("start_time", 0)
+        if not is_complete and batch_start_time and (time.time() - batch_start_time > 125):
+            is_complete = True
+            for test in all_tests:
+                if test['status'] == 'Sent':
+                    test['status'] = 'Timed Out'
+        
+        if is_complete and all_tests:
+            tests_to_remove = [tid for tid, test in active_tests.items() if test.get("batch_id") == batch_id]
+            for tid in tests_to_remove:
+                active_tests.pop(tid, None)
+            active_tests.pop(batch_id, None)
+
+        results_payload = {"sms": {"tf": [], "dlc": []}, "mms": {"tf": [], "dlc": []}}
         for test in all_tests:
-            if test['status'] == 'Sent': test['status'] = 'Timed Out'
-    if is_complete and all_tests:
-        tests_to_remove = [tid for tid, test in active_tests.items() if test.get("batch_id") == batch_id]
-        for tid in tests_to_remove: active_tests.pop(tid, None)
-        active_tests.pop(batch_id, None)
-    results_payload = {"sms": {"tf": [], "dlc": []}, "mms": {"tf": [], "dlc": []}}
-    for test in all_tests:
-        if test["type"] == 'SMS':
-            results_payload["sms"]["tf" if test["from_name"] == 'TF' else "dlc"].append(test)
-        elif test["type"] == 'MMS':
-            results_payload["mms"]["tf" if test["from_name"] == 'TF' else "dlc"].append(test)
-    for msg_type in results_payload:
-        for num_type in results_payload[msg_type]:
-            results_payload[msg_type][num_type].sort(key=lambda x: (x['latency'] is None, x['latency']))
+            if test["type"] == 'SMS':
+                results_payload["sms"]["tf" if test["from_name"] == 'TF' else "dlc"].append(test)
+            elif test["type"] == 'MMS':
+                results_payload["mms"]["tf" if test["from_name"] == 'TF' else "dlc"].append(test)
+        
+        for msg_type in results_payload:
+            for num_type in results_payload[msg_type]:
+                results_payload[msg_type][num_type].sort(key=lambda x: (x['latency'] is None, x['latency']))
+                
     return jsonify({"is_complete": is_complete, "results": results_payload})
 
 @app.route("/run_analysis", methods=["POST"])
@@ -147,7 +170,8 @@ def api_bulk_status(batch_id):
 def run_analysis():
     media_url = request.form["media_url"]
     analysis_id = f"analysis_{time.time()}"
-    active_tests[analysis_id] = {"status": "running"}
+    with active_tests_lock:
+        active_tests[analysis_id] = {"status": "running"}
     threading.Thread(target=perform_media_analysis, args=(analysis_id, media_url)).start()
     return redirect(url_for('analysis_results_page', analysis_id=analysis_id))
 
@@ -159,12 +183,13 @@ def analysis_results_page(analysis_id):
 @app.route("/api/analysis_status/<analysis_id>")
 @requires_auth
 def api_analysis_status(analysis_id):
-    result = active_tests.get(analysis_id)
-    if result and result.get("status") == "complete":
-        active_tests.pop(analysis_id, None)
-        return jsonify(result)
-    elif not result:
-        return jsonify({"status": "complete", "error": "Test not found or already complete."})
+    with active_tests_lock:
+        result = active_tests.get(analysis_id)
+        if result and result.get("status") == "complete":
+            active_tests.pop(analysis_id, None)
+            return jsonify(result)
+        elif not result:
+            return jsonify({"status": "complete", "error": "Test not found or already complete."})
     return jsonify({"status": "running"})
 
 @app.route("/webhook", methods=["POST"])
@@ -190,17 +215,20 @@ def process_phone_simulator_webhook(event):
         except Exception as e:
             print(f"Error downloading media for simulator: {e}")
     message = {'from': message_details['from'], 'text': message_details.get('text', ''), 'media_content': image_content_base64}
-    phone_simulator_messages.append(message)
-    if len(phone_simulator_messages) > 20: phone_simulator_messages.pop(0)
+    with phone_simulator_lock:
+        phone_simulator_messages.append(message)
+        if len(phone_simulator_messages) > 20: phone_simulator_messages.pop(0)
 
 def process_dlr_webhook(event):
     message_info = event.get("message", {})
     test_id_from_tag = message_info.get("tag")
     if not test_id_from_tag: return
-    with app.app_context():
+    
+    with active_tests_lock:
         if test_id_from_tag in active_tests:
             test_info = active_tests[test_id_from_tag]
             event_type = event.get("type")
+            
             if event_type == "message-delivered":
                 start_time = test_info.get("start_time") or test_info.get("events", {}).get("sent")
                 if start_time:
@@ -210,7 +238,7 @@ def process_dlr_webhook(event):
                     test_info.setdefault("events", {})["delivered"] = time.time()
                     test_info["event"].set()
             elif event_type == "message-failed":
-                error_msg = f"Failed: {event.get('description')}"
+                error_msg = f"Failed: {event.get('description', 'Unknown')}"
                 test_info["status"] = error_msg
                 if test_info.get("event"):
                     test_info["error"] = error_msg
@@ -225,25 +253,25 @@ def send_message(from_number, application_id, destination_number, message_type, 
     payload = {"to": [destination_number], "from": from_number, "text": text_content, "applicationId": application_id, "tag": test_id}
     if message_type == "mms":
         payload["media"] = [STATIC_MMS_IMAGE_URL]
+        
     try:
         response = requests.post(api_url, auth=auth, json=payload, timeout=15)
-        response_data = response.json()
-        with app.app_context():
+        with active_tests_lock:
             if test_id in active_tests:
                 if response.status_code == 202:
                     active_tests[test_id]["start_time"] = time.time()
                     active_tests[test_id]["status"] = "Sent"
                     if not test_id.startswith("bulk_"):
-                        active_tests[test_id]["message_id"] = response_data.get("id")
+                        active_tests[test_id]["message_id"] = response.json().get("id")
                         active_tests[test_id].setdefault("events", {})["sent"] = active_tests[test_id]["start_time"]
                 else:
-                    error_msg = f"API Error ({response.status_code}): {response_data.get('description', 'Unknown error')}"
+                    error_msg = f"API Error ({response.status_code}): {response.json().get('description', 'Unknown error')}"
                     active_tests[test_id]["status"] = error_msg
                     if active_tests[test_id].get("event"):
                         active_tests[test_id]["error"] = error_msg
                         active_tests[test_id]["event"].set()
     except Exception as e:
-        with app.app_context():
+        with active_tests_lock:
             if test_id in active_tests:
                 active_tests[test_id]["status"] = "Request Error"
                 if active_tests[test_id].get("event"):
@@ -255,7 +283,7 @@ def perform_media_analysis(analysis_id, media_url):
     try:
         response = requests.get(media_url, allow_redirects=True, timeout=10)
         response.raise_for_status()
-        checks.append({"icon": "✅", "message": f"URL is accessible."})
+        checks.append({"icon": "✅", "message": "URL is accessible."})
         content_type = response.headers.get('Content-Type', 'N/A')
         if any(t in content_type for t in ['image/jpeg', 'image/png', 'image/gif']):
             checks.append({"icon": "✅", "message": f"Content-Type '{content_type}' is supported."}); show_preview = True
@@ -279,9 +307,9 @@ def perform_media_analysis(analysis_id, media_url):
                 spam_checks.append({"icon": "⚠️", "message": "Could not perform OCR analysis."})
     except requests.exceptions.RequestException as e:
         error = f"Could not connect to URL: {e}"
-    with app.app_context():
+    with active_tests_lock:
         active_tests[analysis_id] = {"status": "complete", "error": error, "url": media_url, "checks": checks, "spam_checks": spam_checks, "analysis": analysis, "show_preview": show_preview}
 
-# This block is for local development
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

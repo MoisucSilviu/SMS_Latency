@@ -150,6 +150,11 @@ def api_bulk_status(batch_id):
                 results_payload[msg_type][num_type].sort(key=lambda x: (x['latency'] is None, x['latency']))
     return jsonify({"is_complete": is_complete, "results": results_payload})
 
+@app.route("/analyze")
+@requires_auth
+def inspector_page():
+     return render_template('result_page.html', result_type='analysis_form')
+
 @app.route("/run_analysis", methods=["POST"])
 @requires_auth
 def run_analysis():
@@ -163,7 +168,7 @@ def run_analysis():
 @app.route("/analysis_results/<analysis_id>")
 @requires_auth
 def analysis_results_page(analysis_id):
-    return render_template('result_page.html', result_type='analysis', analysis_id=analysis_id)
+    return render_template('result_page.html', result_type='analysis_result', analysis_id=analysis_id)
 
 @app.route("/api/analysis_status/<analysis_id>")
 @requires_auth

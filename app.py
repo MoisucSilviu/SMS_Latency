@@ -13,7 +13,7 @@ from datetime import datetime
 from PIL import Image
 import pytesseract
 
-# Load environment variables
+# Load environment variables from a .env file
 load_dotenv()
 
 # --- CONFIGURATION ---
@@ -142,6 +142,11 @@ def api_bulk_status(batch_id):
             results_payload[msg_type][num_type].sort(key=lambda x: (x['latency'] is None, x['latency']))
     return jsonify({"is_complete": is_complete, "results": results_payload})
 
+@app.route("/analyze")
+@requires_auth
+def inspector_page():
+    return render_template('result_page.html', result_type='analysis_form')
+
 @app.route("/run_analysis", methods=["POST"])
 @requires_auth
 def run_analysis():
@@ -154,7 +159,7 @@ def run_analysis():
 @app.route("/analysis_results/<analysis_id>")
 @requires_auth
 def analysis_results_page(analysis_id):
-    return render_template('result_page.html', result_type='analysis', analysis_id=analysis_id)
+    return render_template('result_page.html', result_type='analysis_result', analysis_id=analysis_id)
 
 @app.route("/api/analysis_status/<analysis_id>")
 @requires_auth
@@ -175,7 +180,7 @@ def handle_webhook():
         event_type = event.get("type")
         if event_type == "message-received":
             process_phone_simulator_webhook(event)
-        else: # DLRs for our testing tools
+        else:
             process_dlr_webhook(event)
     return "OK", 200
 
@@ -210,7 +215,7 @@ def process_dlr_webhook(event):
                 if start_time:
                     test_info["latency"] = time.time() - start_time
                     test_info["status"] = "Delivered"
-                if test_info.get("event"): # This is a single test
+                if test_info.get("event"):
                     test_info.setdefault("events", {})["delivered"] = time.time()
                     test_info["event"].set()
             elif event_type == "message-failed":
@@ -286,6 +291,6 @@ def perform_media_analysis(analysis_id, media_url):
     with app.app_context():
         active_tests[analysis_id] = {"status": "complete", "error": error, "url": media_url, "checks": checks, "spam_checks": spam_checks, "analysis": analysis, "show_preview": show_preview}
 
-# --- MAIN EXECUTION ---
+# This block is for local development
 if __name__ == "__main__":
     print("This script is intended to be run with a production WSGI server like Gunicorn.")

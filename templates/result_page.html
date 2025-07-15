@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Result - Bandwidth Tools</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"/>
+    <style>
+        body > main { padding: 2rem; max-width: 1200px; }
+        nav { margin-bottom: 2rem; }
+        .error { background-color: var(--pico-form-element-invalid-background-color); color: var(--pico-form-element-invalid-color); padding: 1rem; border-radius: var(--pico-border-radius); white-space: pre-wrap; word-wrap: break-word; }
+        .highlight { background-color: var(--pico-color-green-100); }
+        .timeline { list-style-type: none; padding-left: 0; }
+        .timeline li { padding-left: 2rem; border-left: 3px solid var(--pico-primary); position: relative; padding-bottom: 1.5rem; margin-left: 1rem; }
+        .timeline li::before { content: '✓'; position: absolute; left: -12px; top: 0; background: var(--pico-primary); color: white; width: 24px; height: 24px; border-radius: 50%; text-align: center; line-height: 24px; }
+        .sent { color: var(--pico-color-azure-600); }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        pre { background-color: #f5f5f5; padding: 1rem; border-radius: var(--pico-border-radius); white-space: pre-wrap; word-wrap: break-word; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); grid-gap: 2rem; }
+    </style>
+</head>
+<body>
+<main class="container">
+    <nav>
+        <ul><li><strong>Bandwidth Tools</strong></li></ul>
+        <ul>
+            <li><a href="/">Dashboard</a></li>
+        </ul>
+    </nav>
+    <article>
+        {# --- DLR TEST RESULT --- #}
+        {% if result_type == 'dlr' %}
+            <h2>Test Result</h2>
+            {% if result_data.error %}
+                <p class="error"><strong>Error:</strong><br>{{ result_data.error }}</p>
+            {% elif not is_complete and message_type == "mms" and result_data.events.get("sent") %}
+                <h3 class="sent">✅ MMS Sent Successfully!</h3>
+                <p><strong>Message ID:</strong> {{ result_data.message_id }}</p><hr>
+                <p><strong>Note:</strong> A 'message-delivered' report was not received within the 60-second timeout.</p>
+            {% elif not is_complete %}
+                <p class="error"><strong>Error:</strong><br>TIMEOUT: No final webhook was received.</p>
+            {% else %}
+                <h3>DLR Timeline</h3>
+                <ul class="timeline">
+                    <li><strong>Message Sent to API</strong><br>Timestamp: {{ result_data.events.get('sent_str', 'N/A') }}</li>
+                    {% if result_data.events.sending %}<li><strong>Sent to Carrier</strong> (Leg 1 Latency: {{ "%.2f"|format(result_data.events.sending_latency) }}s)<br>Timestamp: {{ result_data.events.get('sending_str', 'N/A') }}</li>{% endif %}
+                    {% if result_data.events.delivered %}<li><strong>Delivered to Handset</strong> (Leg 2 Latency: {{ "%.2f"|format(result_data.events.delivered_latency) }}s)<br>Timestamp: {{ result_data.events.get('delivered_str', 'N/A') }}</li>{% endif %}
+                </ul><hr>
+                <h4>Total End-to-End Latency: {{ "%.2f"|format(result_data.events.total_latency) }} seconds</h4>
+                <p><strong>Message ID:</strong> {{ result_data.message_id }}</p>
+            {% endif %}<br><a href="/" role="button" class="secondary">Back to Dashboard</a>
+
+        {# --- BULK TEST RESULT --- #}
+        {% elif result_type == 'bulk' %}
+            <div id="results-article"><hgroup><h2>Bulk Test Results</h2><p id="status-text">Tests in progress...</p></hgroup><div class="loader" id="loader"></div><div class="grid"><div id="sms-10dlc-results" style="display:none;"><h3>SMS Results (10DLC)</h3><figure><table id="sms-10dlc-table"></table></figure></div><div id="sms-tf-results" style="display:none;"><h3>SMS Results (Toll-Free)</h3><figure><table id="sms-tf-table"></table></figure></div></div><div class="grid"><div id="mms-10dlc-results" style="display:none;"><h3>MMS Results (10DLC)</h3><figure><table id="mms-10dlc-table"></table></figure></div><div id="mms-tf-results" style="display:none;"><h3>MMS Results (Toll-Free)</h3><figure><table id="mms-tf-table"></table></figure></div></div><br><a href="/" role="button" class="secondary">Back to Dashboard</a></div>
+            <script>
+                const batchId = '{{ batch_id }}';
+                function buildTable(data, tableId) {
+                    let table = document.getElementById(tableId);
+                    table.innerHTML = `<thead><tr><th>To</th><th>Carrier</th><th>Status</th><th>Latency (s)</th></tr></thead>`;
+                    let tbody = document.createElement('tbody');
+                    let bestLatency = Infinity;
+                    if (data.length > 0) { const delivered = data.filter(r => r.latency !== null); if (delivered.length > 0) { bestLatency = Math.min(...delivered.map(r => r.latency)); }}
+                    for (const row of data) {
+                        let tr = document.createElement('tr');
+                        if (row.latency === bestLatency) { tr.classList.add('highlight'); }
+                        tr.innerHTML = `<td>${row.to_num}</td><td>${row.carrier_name}</td><td>${row.status}</td><td>${row.latency !== null ? row.latency.toFixed(2) : 'N/A'}</td>`;
+                        tbody.appendChild(tr);
+                    }
+                    table.appendChild(tbody);
+                }
+                function updateResults(data) {
+                    const sections = {"sms-10dlc": data.sms.dlc, "sms-tf": data.sms.tf, "mms-10dlc": data.mms.dlc, "mms-tf": data.mms.tf};
+                    for (const key in sections) { if (sections[key].length > 0) { document.getElementById(key + '-results').style.display = 'block'; buildTable(sections[key], key + '-table'); }}
+                }
+                const interval = setInterval(() => {
+                    fetch(`/api/bulk_status/${batchId}`).then(response => response.json()).then(data => {
+                        updateResults(data.results);
+                        if (data.is_complete) {
+                            document.getElementById('loader').style.display = 'none';
+                            document.getElementById('status-text').innerText = 'All tests are complete.';
+                            clearInterval(interval);
+                        }
+                    });
+                }, 3000);
+            </script>
+        
+        {# --- ANALYSIS RESULT --- #}
+        {% elif result_type == 'analysis' %}
+            <div id="results-article"><hgroup><h2>Analysis Report</h2><p id="status-text">Analysis in progress...</p></hgroup><div class="loader" id="loader"></div><div id="analysis-content" style="display:none;"></div></div>
+            <script>
+                const analysisId = '{{ analysis_id }}';
+                const analysisInterval = setInterval(() => {
+                    fetch(`/api/analysis_status/${analysisId}`).then(response => response.json()).then(data => {
+                        if (data.status === 'complete') {
+                            document.getElementById('loader').style.display = 'none';
+                            document.getElementById('status-text').innerText = 'Analysis complete.';
+                            const contentDiv = document.getElementById('analysis-content');
+                            if (data.error) {
+                                contentDiv.innerHTML = `<p class="error"><strong>Error:</strong> ${data.error}</p>`;
+                            } else {
+                                let technicalChecksHtml = '<h4>Technical Details</h4><ul>' + data.checks.map(c => `<li>${c.icon} ${c.message}</li>`).join('') + '</ul>';
+                                let spamChecksHtml = '<h4>Spam Risk Analysis</h4><ul>' + data.spam_checks.map(c => `<li>${c.icon} ${c.message}</li>`).join('') + '</ul>';
+                                let carrierHtml = '<h4>Carrier Compatibility</h4><figure><table><thead><tr><th>Carrier</th><th>Status</th><th>Note</th></tr></thead><tbody>' + data.analysis.map(c => `<tr><td><strong>${c.name}</strong></td><td>${c.status === 'OK' ? '✅ OK' : '❌ REJECT'}</td><td>${c.note}</td></tr>`).join('') + '</tbody></table></figure>';
+                                let previewHtml = data.show_preview ? `<hr><h4>Media Preview</h4><figure><img src="${data.url}" alt="Media Preview" style="max-width:100%;"></figure>` : '';
+                                contentDiv.innerHTML = `<hgroup><p><strong>URL:</strong> <a href="${data.url}" target="_blank" style="word-break:break-all;">${data.url}</a></p></hgroup><div class="grid-2">${technicalChecksHtml}${spamChecksHtml}</div>${carrierHtml}${previewHtml}`;
+                            }
+                            contentDiv.style.display = 'block';
+                            clearInterval(analysisInterval);
+                        }
+                    });
+                }, 2000);
+            </script>
+        {% endif %}
+    </article>
+</main>
+</body>
+</html>

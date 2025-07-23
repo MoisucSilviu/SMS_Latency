@@ -262,17 +262,14 @@ def api_bulk_status(batch_id):
     batch_start_time = 0
     if batch_id in active_tests:
         batch_start_time = active_tests[batch_id].get("start_time", 0)
-
     if not is_complete and batch_start_time and (time.time() - batch_start_time > 125):
         is_complete = True
         for test in all_tests:
             if test['status'] == 'Sent': test['status'] = 'Timed Out'
-    
     if is_complete and all_tests:
         tests_to_remove = [tid for tid, test in active_tests.items() if test.get("batch_id") == batch_id]
         for tid in tests_to_remove: active_tests.pop(tid, None)
         active_tests.pop(batch_id, None) 
-        
     results_payload = {"sms": {"tf": [], "dlc": []}, "mms": {"tf": [], "dlc": []}}
     for test in all_tests:
         if test["type"] == 'SMS':
@@ -327,7 +324,6 @@ def handle_webhook():
         message_info = event.get("message", {})
         test_id_from_tag = message_info.get("tag")
         if not test_id_from_tag: continue
-        
         if test_id_from_tag in active_tests:
             test_info = active_tests[test_id_from_tag]
             event_type = event.get("type")

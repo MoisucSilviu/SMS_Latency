@@ -240,6 +240,10 @@ HTML_BULK_RESULTS_PAGE = HTML_HEADER + """
 def index():
     return render_template_string(HTML_DLR_FORM)
 
+@app.route("/health")
+def health_check():
+    return "OK", 200
+
 @app.route("/bulk")
 @requires_auth
 def bulk_tester_page():

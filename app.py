@@ -84,37 +84,19 @@ HTML_HEADER = """
 """
 HTML_NAVIGATION = """
     <div role="tablist" class="grid">
-        <button role="tab" data-target="dlr-tester">DLR Tester</button>
+        <button role="tab" data-target="Latency-tester">Latency Tester</button>
         <button role="tab" data-target="bulk-tester">Bulk Tester</button>
         <button role="tab" data-target="mms-analyzer">MMS Analysis</button>
     </div>
 """
 HTML_FOOTER = """
 </main>
-<script>
-    const tabs = document.querySelectorAll('[role="tab"]');
-    const tabPanels = document.querySelectorAll('[role="tabpanel"]');
-    tabs.forEach(tab => {
-        tab.addEventListener('click', (e) => {
-            tabs.forEach(t => t.setAttribute('aria-selected', 'false'));
-            tabPanels.forEach(p => p.setAttribute('aria-hidden', 'true'));
-            const targetId = e.target.getAttribute('data-target');
-            e.target.setAttribute('aria-selected', 'true');
-            document.getElementById(targetId).setAttribute('aria-hidden', 'false');
-        });
-    });
-    const hash = window.location.hash.substring(1);
-    const targetTab = hash ? document.querySelector(`[data-target='${hash}']`) : tabs[0];
-    if(targetTab) {
-        targetTab.click();
-    }
-</script>
 </body>
 </html>
 """
 HTML_DASHBOARD = HTML_HEADER + HTML_NAVIGATION + """
     <section role="tabpanel" id="dlr-tester">
-        <article><h2>Advanced Messaging DLR Tester</h2><form action="/run_test" method="post"><fieldset><legend>From Number Type</legend><label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label><label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label></fieldset><label for="destination_number">Destination Phone Number</label><input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required><fieldset><legend>Message Type</legend><label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label><label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label></fieldset><label for="message_text">Text Message</label><textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea><button type="submit">Run DLR Test</button></form></article>
+        <article><h2>Advanced Messaging Latency Tester</h2><form action="/run_test" method="post"><fieldset><legend>From Number Type</legend><label for="tfn"><input type="radio" id="tfn" name="from_number_type" value="tf" checked> Toll-Free</label><label for="10dlc"><input type="radio" id="10dlc" name="from_number_type" value="10dlc"> 10DLC</label></fieldset><label for="destination_number">Destination Phone Number</label><input type="text" id="destination_number" name="destination_number" placeholder="+15551234567" required><fieldset><legend>Message Type</legend><label for="sms"><input type="radio" id="sms" name="message_type" value="sms" checked> SMS</label><label for="mms"><input type="radio" id="mms" name="message_type" value="mms"> MMS</label></fieldset><label for="message_text">Text Message</label><textarea id="message_text" name="message_text" placeholder="Enter your text caption here..."></textarea><button type="submit">Run Latency Test</button></form></article>
     </section>
     <section role="tabpanel" id="bulk-tester" aria-hidden="true">
         <article><h2>Bulk Performance Tester</h2><p>This tool will send an SMS and an MMS from both your Toll-Free and 10DLC numbers to the following destinations:</p>{% if numbers %}<ul>{% for number, name in numbers %}<li>{{ number }} {% if name %}({{ name }}){% endif %}</li>{% endfor %}</ul>{% else %}<p><em>No destination numbers configured.</em></p>{% endif %}<form action="/run_bulk_test" method="post"><button type="submit" {% if not numbers %}disabled{% endif %}>Start Performance Test</button></form></article>
@@ -122,6 +104,32 @@ HTML_DASHBOARD = HTML_HEADER + HTML_NAVIGATION + """
     <section role="tabpanel" id="mms-analyzer" aria-hidden="true">
         <article><h2>MMS Media Analysis Tool</h2><p>Enter a media URL to check its technical details and compare against carrier limits.</p><form action="/run_analysis" method="post"><label for="media_url">Media URL</label><input type="text" id="media_url" name="media_url" placeholder="https://.../image.png" required><button type="submit">Analyze Media</button></form></article>
     </section>
+    <script>
+        const tabs = document.querySelectorAll('[role="tab"]');
+        const tabPanels = document.querySelectorAll('[role="tabpanel"]');
+        
+        function activateTab(targetId) {
+            tabs.forEach(t => {
+                const isSelected = t.getAttribute('data-target') === targetId;
+                t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+            });
+            tabPanels.forEach(p => {
+                const isSelected = p.getAttribute('id') === targetId;
+                p.setAttribute('aria-hidden', isSelected ? 'false' : 'true');
+            });
+        }
+        
+        tabs.forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                activateTab(e.target.getAttribute('data-target'));
+            });
+        });
+
+        // Activate first tab by default
+        if(tabs.length > 0) {
+            activateTab(tabs[0].getAttribute('data-target'));
+        }
+    </script>
 """ + HTML_FOOTER
 HTML_DLR_RESULT = HTML_HEADER + """
     <article>
@@ -233,13 +241,13 @@ def run_latency_test():
 @requires_auth
 def run_bulk_test():
     batch_id = f"batch_{time.time()}"
-    active_tests[batch_id] = {"start_time": time.time(), "tests": {}}
+    active_tests[batch_id] = {} # Use batch_id to namespace tests
     from_numbers = [{"name": "TF", "number": TF_NUMBER, "appId": TF_APP_ID}, {"name": "10DLC", "number": TEN_DLC_NUMBER, "appId": TEN_DLC_APP_ID}]
     message_types = ["sms", "mms"]
     for dest_num, carrier_name in DESTINATION_NUMBERS:
         for from_data in from_numbers:
             for msg_type in message_types:
-                test_id = f"bulk_{time.time()}_{len(active_tests[batch_id]['tests'])}"
+                test_id = f"bulk_{time.time()}_{len(active_tests[batch_id])}"
                 active_tests[test_id] = {
                     "batch_id": batch_id, "from_name": from_data["name"], "from_num": from_data["number"],
                     "to_num": dest_num, "carrier_name": carrier_name or 'N/A', "type": msg_type.upper(),
@@ -259,17 +267,10 @@ def bulk_results_page(batch_id):
 def api_bulk_status(batch_id):
     all_tests = [test for test in active_tests.values() if test.get("batch_id") == batch_id]
     is_complete = all(r['status'] not in ['Sending...', 'Sent'] for r in all_tests)
-    batch_start_time = 0
-    if batch_id in active_tests:
-        batch_start_time = active_tests[batch_id].get("start_time", 0)
-    if not is_complete and batch_start_time and (time.time() - batch_start_time > 125):
-        is_complete = True
-        for test in all_tests:
-            if test['status'] == 'Sent': test['status'] = 'Timed Out'
     if is_complete and all_tests:
         tests_to_remove = [tid for tid, test in active_tests.items() if test.get("batch_id") == batch_id]
-        for tid in tests_to_remove: active_tests.pop(tid, None)
-        active_tests.pop(batch_id, None) 
+        for tid in tests_to_remove:
+            active_tests.pop(tid, None)
     results_payload = {"sms": {"tf": [], "dlc": []}, "mms": {"tf": [], "dlc": []}}
     for test in all_tests:
         if test["type"] == 'SMS':
@@ -323,7 +324,6 @@ def handle_webhook():
     for event in data:
         message_info = event.get("message", {})
         test_id_from_tag = message_info.get("tag")
-        if not test_id_from_tag: continue
         if test_id_from_tag in active_tests:
             test_info = active_tests[test_id_from_tag]
             event_type = event.get("type")
@@ -342,40 +342,15 @@ def handle_webhook():
                     test_info["error"] = error_msg
                     test_info["event"].set()
             elif event_type == "message-sending" and test_info.get("events") is not None:
-                   test_info["events"]["sending"] = time.time()
+                 test_info["events"]["sending"] = time.time()
     return "OK", 200
-
-@app.route("/report-delivery", methods=["POST"])
-def report_delivery():
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-    test_id = data.get("messageId")
-    timestamp_ms = data.get("timestamp")
-    if not test_id or not timestamp_ms:
-        return jsonify({"error": "Missing messageId or timestamp"}), 400
-    print(f"HANDSET DLR RECEIVED for test_id: {test_id}")
-    if test_id in active_tests:
-        test_info = active_tests[test_id]
-        delivery_time_seconds = timestamp_ms / 1000.0
-        test_info["status"] = "Delivered (Handset)"
-        test_info.setdefault("events", {})["delivered"] = delivery_time_seconds
-        start_time = test_info.get("start_time")
-        if start_time:
-             test_info["latency"] = delivery_time_seconds - start_time
-        if test_info.get("event"):
-            test_info["event"].set()
-        return jsonify({"status": "success", "message": f"Test {test_id} updated."}), 200
-    else:
-        return jsonify({"error": f"Test ID {test_id} not found or already completed."}), 404
 
 # --- CORE LOGIC ---
 def send_message(from_number, application_id, destination_number, message_type, text_content, test_id):
     api_url = f"https://messaging.bandwidth.com/api/v2/users/{BANDWIDTH_ACCOUNT_ID}/messages"
     auth = (BANDWIDTH_API_TOKEN, BANDWIDTH_API_SECRET)
     headers = {"Content-Type": "application/json"}
-    full_text_content = f"{text_content} ID: {test_id}"
-    payload = {"to": [destination_number], "from": from_number, "text": full_text_content, "applicationId": application_id, "tag": test_id}
+    payload = {"to": [destination_number], "from": from_number, "text": text_content, "applicationId": application_id, "tag": test_id}
     if message_type == "mms":
         payload["media"] = [STATIC_MMS_IMAGE_URL]
     try:
